@@ -1,0 +1,1172 @@
+# KANAK — MASTER ENGINEERING CONTINUATION DIRECTIVE
+## Production Hardening, Live Integration Verification, Security Audit & Release Readiness
+
+**Application:** Kanak  
+**Platform:** Android — Kotlin / Jetpack Compose  
+**Backend:** Google Sheets through a trusted Google Apps Script gateway  
+**Market:** Kingdom of Bahrain  
+**Currency:** BHD  
+**Execution Mode:** Autonomous repository inspection, implementation, correction, testing, and verification
+
+---
+
+# 0. AUTHORITATIVE EXECUTION MANDATE
+
+You are the principal Android engineer, Google Workspace integration architect, security auditor, transaction systems engineer, QA engineer, and release engineer responsible for completing Kanak.
+
+The application has progressed beyond initial implementation.
+
+The latest checkpoint reports passing unit tests, Robolectric repository tests, invoice and inventory operations, receipt generation, and applet compilation.
+
+**Your responsibility is to transform this checkpoint into a genuinely production-ready application, without destroying or unnecessarily rewriting verified existing work.**
+
+Do not restart the application.
+
+Do not regenerate the project from scratch.
+
+Do not replace the existing architecture without a demonstrated technical necessity.
+
+Do not expand the authorized business scope.
+
+Do not claim that a working local repository, passing unit tests, or a compiled emulator application proves production readiness.
+
+Continue implementation until every required capability is verified or a genuine external blocker is identified.
+
+---
+
+# 1. ESTABLISHED CHECKPOINT
+
+The following implementation has been reported.
+
+## 1.1 Financial calculations
+
+File:
+
+`com.example.kanak.domain.financial.BahrainFinancials`
+
+Reported passing tests:
+
+- testBhdFormatting
+- testBahrainVatCalculation_StandardExample
+- testBahrainVatCalculation_ZeroRatedProduct
+- testBahrainInvoiceTotalsReconciliation
+
+Expected contracts:
+
+- BigDecimal arithmetic.
+- Three-decimal BHD amounts.
+- VAT-inclusive selling prices.
+- Standard 10% VAT.
+- Zero-rated products.
+- Exact invoice reconciliation.
+
+## 1.2 Automatic product images
+
+File:
+
+`com.example.kanak.images.BingThumbnailUrlBuilder`
+
+Reported passing tests:
+
+- testBingThumbnailUrlBuilder_ScreenshotExample
+- testBingThumbnailUrlBuilder_WhitespaceNormalization
+- testBingThumbnailUrlBuilder_EmptyInputs
+
+Canonical automatic URL:
+
+`https://tse1.mm.bing.net/th?q={URL_ENCODED_BARCODE_AND_PRODUCT_NAME}`
+
+Preserve this behavior.
+
+## 1.3 ESC/POS receipt rendering
+
+File:
+
+`com.example.kanak.printing.EscPosReceiptRenderer`
+
+Reported passing:
+
+- testEscPosReceiptRenderer
+
+Supported rendering includes:
+
+- ESC/POS command bytes.
+- Monospace receipt layout.
+- 32-column and 48-column formatting.
+- Text wrapping.
+- Receipt previews.
+
+## 1.4 Bluetooth printing
+
+File:
+
+`com.example.kanak.printing.BluetoothPrinterManager`
+
+Reported capabilities:
+
+- Bluetooth Classic discovery.
+- Paired-printer selection.
+- Stored printer address.
+- Simulated printer transport.
+
+Physical device communication has not been demonstrated.
+
+## 1.5 Inventory and invoice operations
+
+File:
+
+`com.example.kanak.data.repository.KanakRepository`
+
+Reported passing tests:
+
+- testCreateInvoice_DeductsStockAtomically
+- testCreateInvoice_RejectsInsufficientStock
+- testVoidInvoice_RestoresStockOnce
+- testCreatePurchase_IncreasesStock
+- testCorrectPurchase_AppliesStockDelta
+- testReversePurchase_ReducesStockAndRejectsNegative
+- testAdjustStock_SignedDeltaAndReasonRequired
+- testReferentialIntegrity_DeleteProductProtected
+- testReferentialIntegrity_DeleteCustomerProtected
+
+Preserve these business invariants.
+
+However, independently determine whether these tests exercise actual Google Sheets operations, local repository state, or simulated persistence.
+
+Do not equate local atomic behavior with atomic remote spreadsheet writes.
+
+## 1.6 Google Apps Script
+
+Reported files:
+
+- apps-script/Code.gs
+- apps-script/Auth.gs
+- apps-script/Schema.gs
+- apps-script/SheetsRepository.gs
+- apps-script/Inventory.gs
+- apps-script/Invoices.gs
+- apps-script/Images.gs
+
+Reported mechanisms:
+
+- Eight-worksheet schema.
+- Google identity verification.
+- Role-based access.
+- LockService concurrency control.
+- Invoice posting and voiding.
+- Purchases and adjustments.
+- Google Drive image uploads.
+
+Inspect the source to verify the actual implementation.
+
+Do not treat deployment instructions as proof of successful deployment.
+
+## 1.7 Existing validation
+
+Reported:
+
+`gradle :app:testDebugUnitTest`
+
+Result:
+
+`BUILD SUCCESSFUL`
+
+Also reported:
+
+`compile_applet — BUILD SUCCEEDED`
+
+Preserve passing tests and reproduce these results where the current environment permits.
+
+---
+
+# 2. FIRST ACTION — FORENSIC REPOSITORY INSPECTION
+
+Before making changes, inspect the actual repository.
+
+Determine:
+
+1. What is fully implemented.
+2. What is connected to Google Sheets.
+3. What relies on simulated data.
+4. What uses demo-specific behavior.
+5. What has only local unit-test coverage.
+6. What is incomplete.
+7. What may violate security or data integrity.
+8. What requires external credentials or hardware.
+
+Inspect the Git working tree and existing changes.
+
+Preserve valid user work.
+
+Do not delete or replace code solely because another implementation style would be preferable.
+
+Create a focused implementation checklist based on actual findings.
+
+**Do not assume a feature is complete because its filename or UI button exists.**
+
+---
+
+# 3. CRITICAL PRIORITY — PRODUCTION AUTHENTICATION
+
+The checkpoint mentions Google authentication alongside demo Admin and Standard Driver role toggles.
+
+This requires explicit investigation.
+
+## 3.1 Production authentication
+
+Verify that Android Credential Manager obtains a genuine Google identity token.
+
+The backend must verify:
+
+- Valid Google signature.
+- Permitted token issuer.
+- Correct OAuth client audience.
+- Valid expiration.
+- Verified Google subject identifier.
+
+Do not trust client-supplied email addresses or role values as authentication evidence.
+
+## 3.2 User authorization
+
+Use the Users worksheet.
+
+Exact headers:
+
+`user_id, email, role, active`
+
+Valid roles:
+
+- admin
+- standard
+
+The backend must determine the role using the verified Google account subject.
+
+Unknown and inactive users must be rejected.
+
+## 3.3 Demo role toggles
+
+Demo role selection must never confer production privileges.
+
+Required behavior:
+
+- Production mode uses verified Google identity.
+- Production mode loads the role from Users.
+- The client cannot override that role.
+- Demo role toggles are inaccessible or disabled in production mode.
+- Demo data and live business data cannot be confused.
+- Debug-mode behavior cannot grant access to real production records.
+
+If needed, isolate demo functionality behind a build-time debug configuration.
+
+Do not depend on obscured buttons as an authorization mechanism.
+
+## 3.4 Authorization test matrix
+
+Verify server-side enforcement for:
+
+| Operation | Standard | Admin |
+|---|---|---|
+| Product CRUD | Allow | Allow |
+| Customer CRUD | Allow | Allow |
+| Supplier CRUD | Allow | Allow |
+| View stock | Allow | Allow |
+| Create invoices | Allow | Allow |
+| Print invoices | Allow | Allow |
+| Create purchases | Deny | Allow |
+| Correct/reverse purchases | Deny | Allow |
+| Manual stock adjustments | Deny | Allow |
+| Void posted invoices | Deny | Allow |
+| Direct stock overwrite | Deny | Deny |
+
+Send unauthorized requests directly to the gateway in tests.
+
+Confirm that authorization remains effective even if the Android UI is bypassed.
+
+---
+
+# 4. CRITICAL PRIORITY — APPS SCRIPT ENDPOINT SECURITY
+
+Audit the current web-app deployment instructions.
+
+The application currently documents deploying the gateway with access set to Anyone.
+
+Do not treat public endpoint reachability as authorization.
+
+When the script runs under the spreadsheet owner's identity, every public request must be independently authenticated and authorized before privileged data access.
+
+## 4.1 Verify the deployment model
+
+Inspect:
+
+- Web-app execution identity.
+- Access settings.
+- Request handlers.
+- Authentication code.
+- Identity-token verification.
+- Users lookup.
+- Role checks.
+- Spreadsheet access scope.
+- Drive upload permissions.
+- Error responses.
+
+Determine whether the selected deployment settings actually allow the Android client's intended authentication flow.
+
+Do not assume that requiring a Google account to access a web-app URL is equivalent to correctly authenticating an API request.
+
+## 4.2 Secure all routes
+
+Every sensitive route must:
+
+1. Authenticate the caller.
+2. Resolve the verified Google subject.
+3. Check Users.
+4. Check account activation.
+5. Check the required role.
+6. Validate the operation.
+7. Execute only the permitted action.
+8. Return a structured result.
+
+Protect both reads and writes.
+
+## 4.3 Verify token handling
+
+Ensure:
+
+- Tokens are never placed in URL query strings.
+- Tokens are never written into logs.
+- No privileged service credentials appear in the APK.
+- Invalid or expired tokens are rejected.
+- Tokens for an unrelated OAuth client are rejected.
+- A forged role is rejected.
+- An inactive account cannot read business records.
+- An unauthenticated caller cannot invoke privileged actions.
+
+If the current Apps Script environment cannot enforce these properties reliably, correct the authentication boundary using the smallest supported secure alternative.
+
+Do not invent custom authentication protocols.
+
+---
+
+# 5. CRITICAL PRIORITY — REAL GOOGLE SHEETS INTEGRATION
+
+Verify the actual integration between Android, Apps Script, and Google Sheets.
+
+The eight worksheets must remain:
+
+1. Products
+2. Customers
+3. Suppliers
+4. Purchases
+5. Invoices
+6. InvoiceLines
+7. StockAdjustments
+8. Users
+
+Preserve the approved schemas.
+
+Do not create a second business database.
+
+## 5.1 Test environment
+
+Use an isolated test spreadsheet.
+
+Do not run destructive tests against real business records.
+
+Run `initializeSpreadsheet()` only against an authorized spreadsheet where initialization is safe.
+
+Before allowing the initializer to run:
+
+- Detect existing worksheets.
+- Validate expected headers.
+- Preserve existing records.
+- Avoid destructive recreation.
+- Fail safely on incompatible schema.
+
+## 5.2 Real CRUD verification
+
+Execute actual requests through the deployed gateway.
+
+Test:
+
+- Create product.
+- Read product.
+- Edit product.
+- Delete unreferenced product.
+- Reject deletion of referenced product.
+- Create customer.
+- Edit customer.
+- Reject deletion of customer with invoices.
+- Create supplier.
+- Edit supplier.
+- Create purchase.
+- Retrieve purchase.
+- Create invoice.
+- Retrieve invoice and lines.
+- View stock.
+- Adjust stock.
+- Read dashboard values.
+
+After every mutation, independently read the relevant worksheet to confirm the authoritative result.
+
+Do not count a local state update as proof that Sheets changed.
+
+## 5.3 Sync from Sheets
+
+Inspect the Settings action named:
+
+**Sync from Sheets**
+
+Verify it:
+
+- Uses the configured gateway.
+- Authenticates correctly.
+- Reads actual spreadsheet data.
+- Validates the returned schema.
+- Updates application state.
+- Preserves existing data on failure.
+- Displays a clear error when configuration is invalid.
+- Does not silently substitute demo data.
+- Handles expired sessions.
+
+An empty or failed response must not be displayed as a successful sync.
+
+---
+
+# 6. CRITICAL PRIORITY — REMOTE INVENTORY ATOMICITY
+
+The current repository tests reportedly demonstrate atomic inventory behavior.
+
+Verify that equivalent correctness exists in the real Apps Script gateway.
+
+## 6.1 Locking requirements
+
+For stock-changing operations:
+
+1. Acquire the script lock.
+2. Verify acquisition.
+3. Re-read authoritative state.
+4. Validate the operation.
+5. Check the request's stable identifier.
+6. Construct the required spreadsheet mutations.
+7. Commit related changes consistently.
+8. Release the lock through guaranteed cleanup.
+
+Inspect actual lock acquisition, timeout handling, and lock release.
+
+Do not assume calling `getScriptLock()` alone acquires a lock.
+
+## 6.2 Atomic updates
+
+Verify that all logically related changes are committed together through appropriate atomic Google Sheets batch requests.
+
+Do not implement separate unprotected writes that permit:
+
+- Invoice saved without stock deduction.
+- Stock deducted without invoice lines.
+- Purchase created without stock increase.
+- Stock adjustment applied without its audit record.
+- Void recorded without inventory restoration.
+
+If the current gateway performs sequential writes, correct the implementation.
+
+## 6.3 Invoice numbering
+
+The reported invoice format is:
+
+`INV-YYYY-XXXX`
+
+Verify that numbering remains unique under concurrent requests.
+
+Requirements:
+
+- Sequential allocation under the appropriate lock.
+- No duplicate invoice numbers.
+- Unique invoice UUID.
+- Stable retry behavior.
+- No reliance on client-generated sequential counters.
+- Explicit handling of failed submissions.
+
+Do not sacrifice transaction correctness merely to produce gapless numbers.
+
+## 6.4 Idempotency
+
+Test repeated requests using the same UUID.
+
+For purchases:
+
+- Only one purchase is committed.
+- Stock increases once.
+
+For invoices:
+
+- Only one invoice is committed.
+- Stock decreases once.
+
+For void operations:
+
+- Invoice becomes VOID once.
+- Stock is restored once.
+
+For adjustments:
+
+- An adjustment request cannot apply twice merely because the client retries.
+
+After an ambiguous network failure, reconcile by stable ID before retrying.
+
+---
+
+# 7. IMPORTANT CORRECTION — PURCHASE REVERSAL AUDITABILITY
+
+The current report states that reversing a purchase removes the purchase record.
+
+Investigate this implementation.
+
+Deleting historical purchase evidence can undermine transaction traceability and inventory reconciliation.
+
+Do not assume that a passing stock-delta test proves the reversal is audit-safe.
+
+## Required outcome
+
+Preserve the ability to determine:
+
+- Which purchase originally occurred.
+- Its supplier.
+- Its product.
+- Its quantity.
+- Its cost.
+- Its date.
+- Who created it.
+- Whether its stock contribution has subsequently been reversed.
+
+Avoid introducing a new business worksheet.
+
+Prefer an auditable compensating event using the existing StockAdjustments structure where this can represent the reversal correctly and idempotently.
+
+If using compensating adjustments:
+
+- Preserve the original purchase.
+- Link the compensating event deterministically to the original purchase ID.
+- Prevent duplicate reversals.
+- Preserve inventory arithmetic.
+- Make reconciliation account for the adjustment.
+- Ensure a previously reversed purchase cannot be corrected as if it were active.
+- Document how the effective stock contribution is calculated.
+
+If the existing schema cannot safely support these properties, identify the minimum essential schema extension and migration rather than silently deleting history.
+
+Preserve the existing eight-worksheet architecture.
+
+Add regression tests for the chosen approach.
+
+---
+
+# 8. COMPLETE END-TO-END INVOICE VERIFICATION
+
+The highest-priority user journey remains:
+
+**Open App → Google Sign-In → Select Customer → Add Products → Edit Quantities → Review Invoice → Save → Verify Google Sheets → Print Receipt.**
+
+Execute this workflow on the available emulator or Android device.
+
+## 8.1 Customer selection
+
+Verify:
+
+- Search existing customers.
+- Select customer.
+- Add customer without losing invoice draft.
+- Return to the invoice with the new customer selected.
+
+## 8.2 Products
+
+Verify:
+
+- Product search by name.
+- Product search by barcode.
+- Product photo display.
+- Available stock.
+- Selection.
+- Quantity increase/decrease.
+- Direct quantity input.
+- Item removal.
+
+## 8.3 Financial accuracy
+
+Verify:
+
+- BHD three-decimal precision.
+- VAT-inclusive prices.
+- Per-line VAT.
+- Subtotal.
+- VAT total.
+- Grand total.
+- Server-side recalculation.
+- Historical invoice price snapshots.
+
+## 8.4 Saving
+
+Verify:
+
+- Loading feedback.
+- Duplicate-tap prevention.
+- Atomic gateway operation.
+- Authoritative response.
+- Stock deduction.
+- Invoice persistence.
+- Invoice line persistence.
+- Error recovery.
+- Draft preservation.
+- Correct invoice history refresh.
+
+## 8.5 Invoice voiding
+
+Verify:
+
+- Admin-only authorization.
+- Posted invoice immutability.
+- VOID status.
+- voided_at timestamp.
+- Stock restoration exactly once.
+- Repeated void rejection.
+- Exclusion from daily sales totals.
+- Preservation of financial history.
+
+---
+
+# 9. PRODUCT IMAGE INTEGRATION VERIFICATION
+
+Preserve the existing default mechanism.
+
+## 9.1 Automatic image
+
+Construct:
+
+`barcode + " " + product_name`
+
+Encode using UTF-8 form-style URL encoding.
+
+Generate:
+
+`https://tse1.mm.bing.net/th?q={encoded_query}`
+
+Use the exact approved URL-builder behavior.
+
+Do not replace this with a paid search API.
+
+## 9.2 Verify actual rendering
+
+Existing tests verify URL construction.
+
+Now verify:
+
+- The generated URL is requested.
+- A valid image can be decoded.
+- Unavailable images display a fallback.
+- Non-image responses are rejected.
+- Network failures do not block product saving.
+- Image caching works.
+- Repeated navigation does not unnecessarily regenerate URLs.
+
+The Bing thumbnail URL is a best-effort external source, not guaranteed product identification.
+
+## 9.3 User overrides
+
+Verify all three sources:
+
+1. Automatic Bing thumbnail.
+2. Pasted HTTPS image URL.
+3. Uploaded image.
+
+Priority:
+
+**Uploaded Image → Pasted URL → Automatic Thumbnail → Placeholder.**
+
+Manual selection must override automatic generation.
+
+A manually chosen image must survive unrelated product edits.
+
+Changing the name or barcode must not replace an existing manual override.
+
+Provide an explicit Use Automatic Image action.
+
+## 9.4 Upload integration
+
+Verify the Google Drive upload gateway.
+
+Test:
+
+- Android Photo Picker.
+- File validation.
+- Upload request.
+- Upload progress.
+- Failure recovery.
+- Returned image URL.
+- Image retrieval.
+- photo_url persistence.
+- Access-control behavior.
+
+Do not expose private files or credentials merely to make uploaded images render.
+
+Do not store binary image data in Sheets.
+
+---
+
+# 10. BLUETOOTH THERMAL PRINTING VERIFICATION
+
+The current ESC/POS rendering tests are a useful foundation.
+
+Now inspect the actual Bluetooth transport.
+
+Verify:
+
+- Android Bluetooth permissions.
+- Device discovery.
+- Paired-printer selection.
+- Preferred printer persistence.
+- MAC address handling.
+- Connection setup.
+- Byte-stream transmission.
+- Connection timeout.
+- Printer disconnect.
+- Error reporting.
+- Reprinting saved invoices.
+
+## 10.1 Automated transport testing
+
+Use a testable printer transport abstraction.
+
+Test successful and failed transmissions without modifying invoice state.
+
+Verify generated bytes for:
+
+- ESC @
+- ESC a
+- ESC E
+- GS V
+- Receipt data
+- Text alignment
+- Long names
+- BHD amounts
+
+## 10.2 Physical printer testing
+
+Where a supported ESC/POS Bluetooth printer is available, test actual printing.
+
+If physical hardware is unavailable, record:
+
+**Printer transport implemented; physical hardware verification pending.**
+
+Do not report simulated transmission as proof that a paper receipt printed.
+
+## 10.3 Critical invariant
+
+Printing and reprinting must never:
+
+- Create another invoice.
+- Reduce stock.
+- Restore stock.
+- Modify financial totals.
+- Change invoice status.
+
+---
+
+# 11. DASHBOARD VERIFICATION
+
+Verify the three required metrics against authoritative Sheets records.
+
+## Today's sales
+
+Sum totals of POSTED invoices occurring during the current Bahrain-local day.
+
+## Invoice count
+
+Count POSTED invoices in the same Bahrain-local day.
+
+## Top products
+
+Rank products by quantities sold through nonvoid invoice lines for that day.
+
+Use:
+
+`Asia/Bahrain`
+
+Test the UTC-to-Bahrain date boundary.
+
+Ensure VOID invoices do not inflate sales.
+
+Do not introduce unrequested reports.
+
+---
+
+# 12. USER INTERFACE RUNTIME AUDIT
+
+Inspect the real Compose screens in the emulator.
+
+The five primary destinations remain:
+
+- Home.
+- Products.
+- Customers.
+- Invoices.
+- Stock.
+
+Supplier and purchase management must remain accessible through simple contextual navigation.
+
+Settings must support account and printer configuration.
+
+## Required UX checks
+
+- Immediate pressed-state feedback.
+- Clear primary actions.
+- Native system typography.
+- Consistent visual hierarchy.
+- Readable BHD amounts.
+- Accessible touch targets.
+- Appropriate input keyboards.
+- Correct Android Back behavior.
+- Unsaved form-state preservation.
+- Reduced-motion support.
+- Clear loading states.
+- Clear errors.
+- No dead buttons.
+- No misleading success messages.
+- No unnecessary screens.
+
+Preserve the established Apple-inspired Android design philosophy.
+
+Improve actual friction points rather than adding visual complexity.
+
+---
+
+# 13. REGRESSION AND INTEGRATION TESTING
+
+Maintain all previously passing tests.
+
+Expand coverage where genuine integration risks remain.
+
+## 13.1 Local verification
+
+Run:
+
+`./gradlew :app:testDebugUnitTest`
+
+`./gradlew :app:assembleDebug`
+
+`./gradlew :app:lintDebug`
+
+Run instrumentation and Compose UI tests when an appropriate device or emulator is available.
+
+Do not assume `compile_applet` is equivalent to full Android APK assembly.
+
+## 13.2 Live gateway integration tests
+
+Using an isolated test spreadsheet, verify:
+
+- Valid authenticated request.
+- Missing identity token.
+- Expired token.
+- Incorrect token audience.
+- Unknown user.
+- Inactive user.
+- Standard-user purchase denial.
+- Standard-user stock adjustment denial.
+- Admin purchase success.
+- Invoice persistence.
+- Inventory deduction.
+- Invoice voiding.
+- Stock restoration.
+- Duplicate UUID handling.
+- Concurrent stock updates.
+- Timeout reconciliation.
+- Schema mismatch handling.
+
+## 13.3 Fault injection
+
+Test:
+
+- Repeated Save taps.
+- Lost response after commit.
+- Network disconnection during invoice submission.
+- Expired authentication during a mutation.
+- Sheets API failure.
+- Lock acquisition timeout.
+- Concurrent final-unit sale.
+- Invalid stock correction.
+- Broken product image.
+- Image-upload failure.
+- Printer disconnect.
+
+Every failure should leave the application and authoritative data in a determinable, recoverable state.
+
+## 13.4 Regression policy
+
+Do not weaken previously valid tests to obtain a passing build.
+
+If a regression appears:
+
+1. Reproduce it.
+2. Identify the root cause.
+3. Correct the smallest affected area.
+4. Add or update an appropriate regression test.
+5. Run the relevant test suite again.
+
+---
+
+# 14. PRODUCTION CONFIGURATION
+
+Do not embed live credentials in source code.
+
+Use explicit configuration for:
+
+- OAuth client identity.
+- Google Apps Script deployment URL.
+- Spreadsheet ID where appropriate.
+- Seller information.
+- Image-upload storage.
+- Bluetooth printer preferences.
+
+Clearly separate:
+
+- Demo configuration.
+- Isolated integration-test configuration.
+- Production configuration.
+
+The production application must not silently fall back to demo roles or demo data when Google Sheets is unavailable.
+
+## Deployment readiness
+
+Verify the documented steps:
+
+1. Create or select a Google Sheet.
+2. Link the Apps Script project.
+3. Install gateway files.
+4. Validate OAuth and permissions.
+5. Initialize the schema safely.
+6. Provision the administrator.
+7. Deploy the verified gateway.
+8. Configure the Android application.
+9. Authenticate with Google.
+10. Sync actual spreadsheet data.
+11. Execute an authorized test transaction.
+12. Confirm authoritative spreadsheet changes.
+
+Do not claim deployment success unless actual deployment and requests have been verified.
+
+Do not deploy over an existing live business gateway as part of testing without explicit authorization.
+
+---
+
+# 15. RELEASE ACCEPTANCE GATES
+
+Use the following release gates.
+
+## Gate A — Build and tests
+
+- Android APK assembles.
+- Unit tests pass.
+- Robolectric tests pass.
+- Static analysis has no unresolved release-blocking findings.
+- Emulator smoke test succeeds.
+
+## Gate B — Security
+
+- Google sign-in verified.
+- Real identity verification verified.
+- Demo privileges unavailable in production.
+- Unknown and inactive users rejected.
+- Server-side roles enforced.
+- Public requests cannot access business data without authorization.
+
+## Gate C — Google Sheets
+
+- All eight schemas validated.
+- Real CRUD operations verified.
+- Successful writes independently confirmed.
+- Failures preserve data integrity.
+- No competing production datastore.
+
+## Gate D — Inventory
+
+- Purchases update stock.
+- Invoices update stock.
+- Adjustments update stock.
+- Voiding restores stock.
+- Repeated requests are idempotent.
+- Concurrent requests preserve stock invariants.
+- Historical transaction evidence is retained.
+
+## Gate E — Product images
+
+- Automatic URL generation works.
+- Actual rendering is tested.
+- Broken-image fallback works.
+- Pasted URLs work.
+- Device uploads work when configured.
+- Manual overrides persist.
+
+## Gate F — Printing
+
+- Receipt bytes verified.
+- Printer transport verified.
+- Error handling verified.
+- Physical hardware status explicitly documented.
+
+## Gate G — Operational UX
+
+- Complete invoice flow verified.
+- Simple navigation works.
+- No dead actions.
+- Clear error recovery.
+- Accessibility and reduced motion respected.
+
+Every gate must be marked:
+
+- PASS
+- FAIL
+- BLOCKED
+- NOT TESTED
+
+Never treat BLOCKED or NOT TESTED as PASS.
+
+---
+
+# 16. REQUIRED FINAL DELIVERABLE
+
+Provide a factual engineering report with the following sections.
+
+## A. Executive status
+
+Choose:
+
+- VERIFIED COMPLETE
+- FUNCTIONALLY COMPLETE WITH LIMITATIONS
+- PARTIALLY COMPLETE
+- BLOCKED
+
+## B. Changes made
+
+Identify actual modified files and the purpose of each change.
+
+## C. Verification matrix
+
+For each major capability, provide:
+
+- Source file.
+- Test or runtime evidence.
+- Result.
+- Remaining limitation.
+
+## D. Security findings
+
+Report:
+
+- Authentication status.
+- Server-side role enforcement.
+- Endpoint exposure.
+- Credential handling.
+- Unresolved security issues.
+
+## E. Transaction findings
+
+Report:
+
+- Lock acquisition behavior.
+- Atomic batch-write behavior.
+- Idempotency.
+- Invoice numbering.
+- Concurrency tests.
+- Stock reconciliation.
+- Purchase reversal auditability.
+
+## F. Android results
+
+Report:
+
+- Gradle build commands.
+- Build results.
+- Unit-test results.
+- UI-test results.
+- Emulator execution results.
+- APK path if successfully generated.
+
+## G. External integration results
+
+Report independently:
+
+- Google authentication.
+- Live Sheets connectivity.
+- Apps Script deployment.
+- Image loading.
+- Image upload.
+- Bluetooth printer transport.
+- Physical printing.
+
+## H. Remaining blockers
+
+List genuine external prerequisites only.
+
+Do not create artificial blockers when work can continue independently.
+
+## I. Next action
+
+Provide the minimum action required to reach the next verifiable completion state.
+
+---
+
+# 17. AUTONOMOUS EXECUTION RULES
+
+Continue without unnecessary interruptions.
+
+Do not ask for approval for routine repository inspection, local code changes, test execution, or safe refactoring necessary to meet the authorized specification.
+
+Preserve existing working functionality.
+
+Do not introduce unrelated modules.
+
+Do not overwrite or destroy real business data.
+
+Do not deploy external changes or perform destructive operations without the necessary authorization.
+
+Do not invent credentials, results, repository states, or production successes.
+
+If a credential or external device is unavailable:
+
+- Complete independent implementation.
+- Run applicable isolated tests.
+- Document the missing verification.
+- Provide exact setup instructions.
+
+Do not stop simply because one external dependency is missing.
+
+---
+
+# 18. FINAL DIRECTIVE
+
+**Continue Kanak from the latest verified implementation checkpoint.**
+
+Do not restart development.
+
+Do not celebrate compilation as completion.
+
+Do not substitute simulated integration for actual integration.
+
+Your immediate priorities are:
+
+1. Eliminate production authentication and role-bypass risks.
+2. Verify the deployed Apps Script gateway.
+3. Verify real Google Sheets CRUD.
+4. Prove remote inventory transaction consistency.
+5. Correct historical purchase reversal behavior if destructive.
+6. Execute the complete invoice workflow.
+7. Verify actual product image loading and override behavior.
+8. Verify Bluetooth printing to the extent supported by available hardware.
+9. Complete UI and accessibility validation.
+10. Produce a verified Android APK and factual release-readiness report.
+
+**The required outcome is a genuinely functioning Kanak application—not merely a project whose individual components pass unit tests.**
+
+Maintain the authorized eight-worksheet architecture, Bahrain monetary rules, Google authentication, administrative permissions, Bing thumbnail defaults, image overrides, Bluetooth receipt printing, minimalist Compose interface, and all previously established business constraints.
+
+Work methodically, preserve valid progress, fix actual defects, and substantiate every completion claim with evidence.
+
+**Proceed with implementation and verification.**

@@ -1,0 +1,8 @@
+{
+  "firestore": [
+    {
+      "database": "ai-studio-android-kanak-ffab880f-4a04-4378-b5bf-365f0000a2f7",
+      "rules": "firestore.rules"
+    }
+  ]
+}

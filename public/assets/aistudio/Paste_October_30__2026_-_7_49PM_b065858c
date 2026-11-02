@@ -1,0 +1,3107 @@
+# KANAK
+# MASTER AUTONOMOUS ANDROID ENGINEERING DIRECTIVE
+## Production-Grade Bahrain FMCG Van Sales Application
+### Complete Product Specification · Architecture · UX/UI · Implementation · Testing · Release
+
+---
+
+# 0. DOCUMENT PURPOSE AND AUTHORITY
+
+This document is the authoritative implementation contract for an AI engineering agent responsible for designing, building, integrating, testing, securing, documenting, and delivering **Kanak**.
+
+Kanak is a native Android application designed for van sales operations at a wholesale FMCG company in the Kingdom of Bahrain.
+
+This is not a brainstorming exercise.
+
+This is not a request for an architectural proposal.
+
+This is not a request for a static prototype.
+
+This is not permission to deliver disconnected code samples, simulated functionality, or incomplete scaffolding.
+
+**The required deliverable is an actual, complete, buildable Android application with the supporting Google Sheets integration, trusted transaction gateway, source code, configuration templates, documentation, and available verification evidence.**
+
+The application must be deliberately simple, exceptionally user-friendly, financially accurate, secure, and reliable during daily business operations.
+
+Do not introduce unnecessary enterprise complexity.
+
+Do not expand beyond the explicitly authorized business scope.
+
+When an external credential or physical device is unavailable, implement the real integration boundary, document its setup, and identify the exact verification limitation.
+
+Never fabricate successful integrations, API keys, compilation results, test results, or hardware compatibility.
+
+## 0.1 Execution mandate
+
+Execute the following lifecycle:
+
+1. Inspect existing project and environment.
+2. Establish exact requirements and data contracts.
+3. Design the smallest sufficient architecture.
+4. Implement required functionality.
+5. Integrate real services.
+6. Validate transactions and permissions.
+7. Build and test.
+8. Correct discovered failures.
+9. Deliver source code and documentation.
+10. Report verified completion and remaining external prerequisites.
+
+Do not stop at planning when implementation tools are available.
+
+If operating without filesystem or build access, provide complete source artifacts to the extent possible and explicitly distinguish generated code from compiled or tested code.
+
+---
+
+# 1. ROLE AND ENGINEERING RESPONSIBILITY
+
+Operate as a combined:
+
+- Principal Android Software Architect.
+- Senior Kotlin Engineer.
+- Jetpack Compose Specialist.
+- Google Workspace and Google Sheets Integration Engineer.
+- Google OAuth and Mobile Authentication Engineer.
+- Inventory and Transaction Systems Architect.
+- Bahrain VAT and FMCG Systems Specialist.
+- Bluetooth ESC/POS Printing Engineer.
+- Android UI/UX and Interaction Designer.
+- Application Security Engineer.
+- QA and Test Automation Engineer.
+- Android Build and Release Engineer.
+- Technical Documentation Engineer.
+
+You are accountable for the consistency of the entire solution.
+
+A feature is not complete merely because its screen exists.
+
+A feature is complete only when its interface, validation, authorization, persistence, error handling, and applicable tests work together.
+
+---
+
+# 2. PRODUCT OBJECTIVE
+
+Build a simple Android application named:
+
+**KANAK**
+
+Purpose:
+
+Enable employees of a wholesale FMCG company in Bahrain to manage products, customers, suppliers, purchases, stock, invoices, printing, and daily sales.
+
+The application must be approachable for staff who are not technically experienced.
+
+Everyday operations must require minimal navigation and minimal training.
+
+## 2.1 Primary operational workflow
+
+The most important workflow is:
+
+**Open Kanak → Select Customer → Add Products → Set Quantities → Review Invoice → Save → Print Receipt.**
+
+This workflow must receive the highest priority in functionality, interaction design, and performance.
+
+## 2.2 Supporting workflows
+
+- Add, edit, view, and delete products.
+- Add, edit, view, and delete customers.
+- Add, edit, view, and delete suppliers.
+- Record purchases as an administrator.
+- Increase stock through purchases.
+- Decrease stock through invoices.
+- View current inventory.
+- Adjust inventory as an administrator.
+- Automatically associate product photos.
+- Manually override product photos.
+- View current daily sales.
+- Print and reprint invoices.
+- Sign in and out using Google.
+
+## 2.3 Product philosophy
+
+Kanak should feel like a premium, carefully crafted mobile application.
+
+Emphasize:
+
+- Immediate feedback.
+- Clarity.
+- Predictability.
+- Spatial consistency.
+- Minimal cognitive effort.
+- Easy discoverability.
+- Direct manipulation.
+- Clean typography.
+- High information legibility.
+- Fast repetitive operations.
+- Reliable persistence.
+- Graceful failure recovery.
+
+Every screen should have a clear primary purpose.
+
+Every button should have a functioning outcome.
+
+Every error should be understandable.
+
+Every mutation should either succeed reliably or return an explicit failure.
+
+---
+
+# 3. SCOPE AND CONSTRAINTS
+
+## 3.1 Authoritative business datastore
+
+**Google Sheets is the sole authoritative business datastore.**
+
+Do not introduce:
+
+- Firebase Firestore.
+- Supabase.
+- PostgreSQL.
+- MySQL.
+- An independent SQLite business database.
+- A separate inventory database.
+- An independent customer database.
+- A competing transaction ledger outside Google Sheets.
+
+A minimal trusted gateway is permitted for authentication, authorization, transactional operations, and secure external integrations.
+
+Google Drive or equivalent object storage may be used only for binary product images.
+
+Such image storage must not become a second business datastore.
+
+## 3.2 Required entities
+
+Exactly eight worksheets:
+
+1. Products.
+2. Customers.
+3. Suppliers.
+4. Purchases.
+5. Invoices.
+6. InvoiceLines.
+7. StockAdjustments.
+8. Users.
+
+The Users worksheet exists solely for access control.
+
+Do not add arbitrary business tables.
+
+Additional metadata is permitted only when essential for correct transaction integrity and explicitly documented.
+
+## 3.3 Required features
+
+- Google authentication.
+- Session restoration.
+- Admin and standard roles.
+- Role enforcement on every operation.
+- Product catalogue.
+- Product CRUD.
+- Customer CRUD.
+- Supplier CRUD.
+- Purchase management.
+- Invoice creation and controlled lifecycle management.
+- Invoice line management.
+- Automatic product image generation.
+- Image URL overrides.
+- Device image uploads.
+- Inventory viewing.
+- Admin inventory adjustments.
+- Bluetooth thermal receipt printing.
+- Daily sales dashboard.
+- Minimal account and printer settings.
+
+## 3.4 Explicitly excluded functionality
+
+Do not implement:
+
+- Full accounting.
+- Supplier payable accounting.
+- Customer credit accounts.
+- Payment gateway integration.
+- Payroll.
+- Employee attendance.
+- Expense management.
+- Delivery tracking.
+- GPS.
+- Route optimization.
+- Warehouse management.
+- Inventory transfers.
+- Multi-company support.
+- Multi-branch management.
+- Multi-currency.
+- Advanced financial reporting.
+- Barcode-scanning hardware integration.
+- Full offline synchronization.
+- Web application.
+- iOS application.
+- Chatbots.
+- Unrequested AI features.
+- E-commerce.
+- Loyalty programs.
+- Complex approval workflows.
+
+Do not add features merely because other POS or ERP systems include them.
+
+---
+
+# 4. LOCKED TECHNOLOGY DIRECTION
+
+## 4.1 Android stack
+
+Use:
+
+- Native Android.
+- Kotlin.
+- Jetpack Compose.
+- Material 3 foundations.
+- Android Credential Manager.
+- Kotlin Coroutines.
+- StateFlow.
+- ViewModel.
+- Repository pattern.
+- Retrofit or a maintained equivalent.
+- Kotlin serialization or Moshi.
+- Coil for image loading.
+- A maintained ESC/POS-compatible Bluetooth printing implementation.
+- Gradle Kotlin DSL.
+- AndroidX Test and Compose UI testing.
+
+Use current compatible stable library versions at implementation time.
+
+Verify APIs and dependency compatibility before selecting versions.
+
+Do not invent version numbers.
+
+Avoid unnecessary third-party libraries.
+
+## 4.2 Application structure
+
+Use a small, coherent architecture.
+
+```text
+Jetpack Compose UI
+        │
+     ViewModels
+        │
+   Business Logic
+        │
+    Repositories
+        │
+Authenticated Network Client
+        │
+Trusted Google Apps Script Gateway
+        │
+     Google Sheets
+```
+
+Product image upload may additionally use Google Drive through the trusted gateway.
+
+## 4.3 Architectural principles
+
+- Single source of truth.
+- Small number of layers.
+- Explicit contracts.
+- Immutable UI state.
+- Typed domain models.
+- Deterministic financial calculations.
+- Centralized validation.
+- Server-enforced permissions.
+- No duplicated business logic.
+- Replaceable external integrations.
+- Testable printer implementation.
+- Minimal local persistence.
+
+Do not introduce excessive clean-architecture abstractions where simpler code is sufficient.
+
+---
+
+# 5. GOOGLE SHEETS SCHEMA
+
+The schema must be designed and implemented before UI development.
+
+Create one Google spreadsheet containing the eight required worksheets.
+
+Use the exact worksheet names and column names below.
+
+All business record IDs must be immutable UUID strings.
+
+The Users user_id must be the verified Google account subject identifier.
+
+Never use spreadsheet row numbers as permanent identifiers.
+
+## 5.1 Products
+
+Worksheet:
+
+`Products`
+
+Exact columns:
+
+```text
+product_id
+barcode
+name
+cost_price
+selling_price
+vat_rate
+vat_amount
+photo_url
+stock_qty
+```
+
+Types:
+
+| Column | Type |
+|---|---|
+| product_id | UUID string |
+| barcode | String |
+| name | String |
+| cost_price | Decimal BHD |
+| selling_price | Decimal BHD |
+| vat_rate | Decimal |
+| vat_amount | Decimal BHD |
+| photo_url | Optional HTTPS URL |
+| stock_qty | Non-negative decimal |
+
+Rules:
+
+- product_id is immutable.
+- barcode must preserve leading zeros.
+- Nonempty duplicate barcodes are forbidden.
+- name is required.
+- cost_price cannot be negative.
+- selling_price cannot be negative.
+- vat_rate must be a configured, permitted rate.
+- vat_amount is derived from the VAT-inclusive selling price.
+- photo_url holds exactly one current product image reference.
+- stock_qty cannot become negative.
+- New products start with stock_qty = 0.
+- Initial inventory must be established through an authorized purchase or stock adjustment.
+- Stock cannot be directly changed through product editing.
+
+Image behavior is specified fully in Section 10.
+
+## 5.2 Customers
+
+Worksheet:
+
+`Customers`
+
+Exact columns:
+
+```text
+customer_id
+business_name
+contact
+address
+phone
+```
+
+Types:
+
+- customer_id: UUID string.
+- business_name: Required string.
+- contact: String.
+- address: String.
+- phone: String.
+
+Preserve phone numbers as strings.
+
+## 5.3 Suppliers
+
+Worksheet:
+
+`Suppliers`
+
+Exact columns:
+
+```text
+supplier_id
+name
+contact
+```
+
+Types:
+
+- supplier_id: UUID string.
+- name: Required string.
+- contact: String.
+
+## 5.4 Purchases
+
+Worksheet:
+
+`Purchases`
+
+Exact columns:
+
+```text
+purchase_id
+supplier_id
+product_id
+qty
+cost
+date
+created_by
+```
+
+Types:
+
+- purchase_id: UUID string.
+- supplier_id: Existing supplier ID.
+- product_id: Existing product ID.
+- qty: Positive decimal.
+- cost: Non-negative BHD unit cost.
+- date: Canonical UTC timestamp.
+- created_by: Verified user ID.
+
+Rules:
+
+- Admin-only mutations.
+- A purchase represents stock actually received.
+- Creating a purchase increases stock.
+- Correcting a purchase applies only the inventory difference.
+- Reversing a purchase removes the corresponding stock contribution.
+- Reject reversals that would cause negative stock.
+- Duplicate purchase requests must not create duplicate stock increases.
+
+## 5.5 Invoices
+
+Worksheet:
+
+`Invoices`
+
+Exact columns:
+
+```text
+invoice_id
+invoice_number
+customer_id
+customer_name
+date
+subtotal
+vat_total
+total
+status
+created_by
+voided_at
+```
+
+Types:
+
+- invoice_id: UUID string.
+- invoice_number: Unique human-readable string.
+- customer_id: Existing customer ID.
+- customer_name: Historical customer-name snapshot.
+- date: Canonical UTC timestamp.
+- subtotal: Decimal BHD.
+- vat_total: Decimal BHD.
+- total: Decimal BHD.
+- status: POSTED or VOID.
+- created_by: Verified user ID.
+- voided_at: Optional UTC timestamp.
+
+Rules:
+
+- Uncommitted invoice drafts remain in application state.
+- Only successfully submitted invoices become POSTED.
+- Posted financial records are immutable.
+- An invoice may be VOID only through an authorized operation.
+- Voiding restores its inventory effect exactly once.
+- Posted invoices must not be physically deleted.
+- Editing a posted invoice requires a controlled void-and-replace workflow.
+- Invoice numbers must remain unique during concurrent submissions.
+
+## 5.6 InvoiceLines
+
+Worksheet:
+
+`InvoiceLines`
+
+Exact columns:
+
+```text
+line_id
+invoice_id
+product_id
+product_name
+qty
+unit_price
+vat_rate
+vat_amount
+line_total
+```
+
+Types:
+
+- line_id: UUID string.
+- invoice_id: Existing invoice ID.
+- product_id: Existing product ID.
+- product_name: Historical text snapshot.
+- qty: Positive decimal.
+- unit_price: VAT-inclusive unit price.
+- vat_rate: Historical VAT rate.
+- vat_amount: Line VAT amount.
+- line_total: VAT-inclusive line total.
+
+Historical invoice lines must never change when catalogue records are edited.
+
+## 5.7 StockAdjustments
+
+Worksheet:
+
+`StockAdjustments`
+
+Exact columns:
+
+```text
+adjustment_id
+product_id
+delta_qty
+reason
+date
+created_by
+```
+
+Rules:
+
+- Admin-only.
+- Signed decimal delta.
+- Reason is required.
+- Resulting stock cannot be negative.
+- Every adjustment must be traceable.
+- Committed adjustments are immutable.
+- Correction requires a compensating adjustment.
+
+## 5.8 Users
+
+Worksheet:
+
+`Users`
+
+Exact columns:
+
+```text
+user_id
+email
+role
+active
+```
+
+Valid roles:
+
+```text
+admin
+standard
+```
+
+Rules:
+
+- user_id is the verified Google account subject.
+- email is informational, not the authoritative primary key.
+- active is a boolean.
+- Unknown users are denied.
+- Inactive users are denied.
+- First administrator must be provisioned explicitly by the spreadsheet owner.
+- Never automatically promote the first person who signs in.
+- Do not create unrequested user-management screens.
+
+## 5.9 Data-contract requirements
+
+Implement:
+
+- Exact header validation.
+- Stable ID-based lookup.
+- Required-field validation.
+- Decimal parsing.
+- Duplicate prevention.
+- Referential integrity checks.
+- Type-safe mapping.
+- Consistent serialization.
+- Explicit malformed-data errors.
+
+Missing columns must produce configuration errors.
+
+Never silently invent replacement columns.
+
+Provide a reproducible spreadsheet initialization procedure or script.
+
+---
+
+# 6. AUTHENTICATION AND ROLE ENFORCEMENT
+
+## 6.1 Google sign-in
+
+Implement Google authentication using Android Credential Manager.
+
+Support:
+
+- Google account selection.
+- Successful sign-in.
+- User cancellation.
+- Authentication failure.
+- Session restoration.
+- Expired credentials.
+- Sign-out.
+
+Do not use deprecated authentication flows when current supported alternatives are available.
+
+## 6.2 Authorization architecture
+
+The Android app must not receive unrestricted spreadsheet-owner credentials.
+
+For production operation, use a small trusted Google Apps Script gateway.
+
+The gateway runs with appropriately authorized spreadsheet access and independently validates every request.
+
+It must:
+
+1. Receive the Google identity token through HTTPS.
+2. Verify the token with a supported trusted verification mechanism.
+3. Validate token signature, issuer, audience, and expiration.
+4. Read the verified account subject.
+5. Match the subject against Users.user_id.
+6. Verify that active is true.
+7. Determine the role from the Users worksheet.
+8. Authorize the requested operation.
+9. Validate all submitted values.
+10. Perform the operation.
+11. Return a structured result.
+
+Never trust a role or user ID claimed by the Android client.
+
+For Apps Script, do not rely on Session.getActiveUser().getEmail() as universal proof of caller identity when deployed to execute as the owner.
+
+If the chosen Apps Script deployment cannot securely validate the caller's Google identity, correct the authentication architecture before claiming production readiness.
+
+Do not create a custom cryptographic verification implementation unnecessarily.
+
+Use supported Google verification infrastructure and document its limitations.
+
+## 6.3 Google Sheets scope
+
+The privileged Sheets integration requires:
+
+```text
+https://www.googleapis.com/auth/spreadsheets
+```
+
+Normal staff should not require full direct edit permission to the spreadsheet.
+
+The owner's authorized gateway can hold this scope.
+
+Any additional Google Drive scope for image uploading must be justified and limited.
+
+## 6.4 Permission matrix
+
+| Operation | Standard | Admin |
+|---|---|---|
+| View dashboard | Yes | Yes |
+| View products | Yes | Yes |
+| Create products | Yes | Yes |
+| Edit product details | Yes | Yes |
+| Delete unreferenced products | Yes | Yes |
+| Customer CRUD | Yes | Yes |
+| Supplier CRUD | Yes | Yes |
+| View stock | Yes | Yes |
+| Create invoices | Yes | Yes |
+| Edit unsaved invoice drafts | Yes | Yes |
+| View invoices | Yes | Yes |
+| Print/reprint invoices | Yes | Yes |
+| Void posted invoices | No | Yes |
+| Create purchases | No | Yes |
+| Correct/reverse purchases | No | Yes |
+| Manual stock adjustments | No | Yes |
+| Directly overwrite stock_qty | No | No |
+| Change user permissions in-app | No | No |
+
+The backend must enforce these rules regardless of which UI is visible.
+
+The app may hide unavailable actions, but hidden actions are not a security boundary.
+
+## 6.5 Security controls
+
+Implement:
+
+- HTTPS communication.
+- Validated identity tokens.
+- Explicit authorization.
+- No embedded privileged credentials.
+- No API secrets in logs.
+- No identity tokens in query strings.
+- Server-side quantity validation.
+- Server-side price and VAT validation.
+- Input length limits.
+- Restricted spreadsheet ownership.
+- Protected critical ranges.
+- Duplicate-request prevention.
+- Clear access-denied messages.
+
+Document that direct manual edits by spreadsheet owners or other privileged editors bypass gateway locking and may violate inventory invariants.
+
+Normal employees must not have those privileges.
+
+---
+
+# 7. TRANSACTION AND INVENTORY INTEGRITY
+
+Google Sheets must be treated as an authoritative transactional data source within its practical limitations.
+
+## 7.1 Protected mutation mechanism
+
+Implement server-side locking using a script-level lock.
+
+Use an atomic Google Sheets batch update for the related cell mutations whenever supported.
+
+For operations involving several worksheets:
+
+- Acquire the lock.
+- Read authoritative state.
+- Validate the operation.
+- Construct all required updates.
+- Submit them as one atomic batch.
+- Verify the response.
+- Release the lock in a guaranteed cleanup path.
+
+Do not rely on independent SpreadsheetApp writes as if they were automatically transactional.
+
+Use stable IDs.
+
+Revalidate row locations under lock before constructing updates.
+
+Do not permit users to bypass the gateway for stock mutations.
+
+## 7.2 Purchase transaction
+
+A successful purchase must atomically:
+
+- Validate the administrator.
+- Validate supplier.
+- Validate product.
+- Validate quantity.
+- Validate cost.
+- Check purchase UUID for duplicates.
+- Read current stock.
+- Write purchase data.
+- Increase product stock.
+- Return the committed result.
+
+A failed transaction must not partially increase stock.
+
+## 7.3 Invoice transaction
+
+A successful invoice must atomically:
+
+- Authenticate the employee.
+- Validate the customer.
+- Validate invoice lines.
+- Verify products still exist.
+- Read authoritative prices and VAT rates.
+- Verify stock availability.
+- Calculate authoritative totals.
+- Check invoice UUID for duplicates.
+- Generate a unique invoice number.
+- Persist invoice header.
+- Persist invoice lines.
+- Decrease corresponding stock quantities.
+- Return the committed invoice.
+
+Do not allow stock to become negative.
+
+Do not trust client-calculated invoice totals as authoritative.
+
+## 7.4 Idempotency
+
+Generate a stable UUID before submitting each new purchase or invoice.
+
+If the request is repeated with the same UUID, return the existing committed record rather than creating another.
+
+If a timeout occurs:
+
+1. Check the authoritative record by UUID.
+2. Return success if already committed.
+3. Retry only if the operation is confirmed absent and retry is safe.
+4. Otherwise show a recoverable uncertain-state message.
+
+Never create duplicate invoices because a user taps Save repeatedly.
+
+## 7.5 Concurrent mutation cases
+
+Handle:
+
+- Two users selling the final available stock.
+- A purchase and invoice affecting the same product.
+- A manual adjustment racing with a sale.
+- Rapid repeated submission.
+- Client interruption during saving.
+- Lost server responses.
+- Temporary Google API failures.
+- Quota exhaustion.
+
+The accepted final stock must match committed inventory events.
+
+## 7.6 Inventory invariants
+
+Maintain:
+
+```text
+stock_qty >= 0
+```
+
+For a valid transaction history:
+
+```text
+Current Stock
+=
+Authorized Initial Stock
++ Purchase Contributions
+- Nonvoid Invoice Quantities
++ Stock Adjustment Deltas
+```
+
+Initial stock must come from an authorized adjustment or purchase.
+
+Never silently manipulate stock to make an inconsistent transaction appear successful.
+
+---
+
+# 8. BAHRAIN CURRENCY AND VAT
+
+## 8.1 Currency
+
+Use BHD exclusively.
+
+Money must display with exactly three decimal places.
+
+Examples:
+
+```text
+BHD 0.500
+BHD 1.250
+BHD 12.000
+```
+
+Use exact decimal arithmetic.
+
+Do not use Float or Double for authoritative monetary calculations.
+
+## 8.2 VAT rates
+
+Default standard VAT rate:
+
+**10%**
+
+Support zero-rated products where legally applicable.
+
+Do not automatically assume every FMCG item is standard-rated.
+
+Product VAT must be explicitly stored in Products.vat_rate.
+
+## 8.3 VAT-inclusive pricing
+
+Treat Products.selling_price as the VAT-inclusive selling price.
+
+Calculate:
+
+```text
+gross = quantity × unit_price
+net = gross / (1 + vat_rate)
+vat = gross - net
+```
+
+Apply a documented consistent three-decimal BHD rounding policy at line level.
+
+Persist VAT for every invoice line.
+
+The invoice subtotal is the sum of rounded line net amounts.
+
+The invoice VAT total is the sum of rounded line VAT amounts.
+
+The final invoice total is the sum of line gross totals.
+
+Ensure:
+
+```text
+subtotal + vat_total = total
+```
+
+## 8.4 Product unit VAT
+
+Products.vat_amount represents derived VAT for one selling unit.
+
+InvoiceLines.vat_amount represents VAT for the entire invoice line.
+
+Do not assume:
+
+```text
+line_vat = rounded_unit_vat × quantity
+```
+
+Always calculate line VAT from the authoritative line total to avoid accumulated rounding errors.
+
+## 8.5 Calculation example
+
+Product:
+
+```text
+Name: Example Item
+Selling price: BHD 1.100
+VAT rate: 10%
+Quantity: 2
+```
+
+Expected:
+
+```text
+Net amount:   BHD 2.000
+VAT:          BHD 0.200
+Line total:   BHD 2.200
+```
+
+## 8.6 Financial tests
+
+Test:
+
+- Standard-rated products.
+- Zero-rated products.
+- Fractional quantities.
+- Three-decimal unit prices.
+- Rounding boundaries.
+- Several invoice lines.
+- Mixed VAT rates.
+- Invoice total reconciliation.
+- Historical price preservation.
+- Voided invoice exclusion.
+
+## 8.7 Seller information
+
+Receipt generation must support configured placeholders for:
+
+- Business name.
+- Business address.
+- VAT registration number where applicable.
+
+Do not fabricate legal identifiers.
+
+Do not claim complete tax-invoice compliance without verifying the seller's actual legal requirements and configured invoice fields.
+
+---
+
+# 9. PRODUCT CATALOGUE AND PRODUCT CRUD
+
+## 9.1 Product list
+
+Display each product with:
+
+- Product photo.
+- Product name.
+- Barcode.
+- Selling price.
+- VAT indication.
+- Available stock.
+
+Use a clean, legible list layout.
+
+Avoid visually dense tables on phones.
+
+## 9.2 Product search
+
+Allow searching by:
+
+- Product name.
+- Barcode.
+
+Search must be responsive.
+
+Preserve barcode leading zeros.
+
+For already loaded product datasets, use local filtering to avoid unnecessary Sheets requests.
+
+## 9.3 Product form
+
+Fields:
+
+```text
+Barcode
+Product Name
+Cost Price
+Selling Price
+VAT Rate
+Product Photo
+```
+
+Stock quantity must be displayed separately as read-only.
+
+Provide a clear path to the authorized stock adjustment or purchase workflow.
+
+Use appropriate keyboard types.
+
+Validate fields before submission.
+
+## 9.4 Product CRUD
+
+Implement:
+
+- Create.
+- Read.
+- Update.
+- Delete when safe.
+
+Deletion must be refused if it would compromise committed historical records.
+
+Do not delete historical invoice lines.
+
+## 9.5 Product creation behavior
+
+On new product creation:
+
+1. User enters barcode.
+2. User enters product name.
+3. App generates the automatic image URL.
+4. App attempts to display the image preview.
+5. User may keep the default.
+6. User may paste another URL.
+7. User may upload an image instead.
+8. User completes price and VAT.
+9. App validates the form.
+10. Product saves to Google Sheets.
+11. Catalogue refreshes with the authoritative record.
+
+Image lookup failure must never block product creation.
+
+---
+
+# 10. PRODUCT IMAGES — AUTHORITATIVE IMPLEMENTATION
+
+**This section is mandatory and replaces the previous third-party image-search API requirement.**
+
+The default product image must be derived using the exact barcode-plus-product-name approach shown in the provided reference screenshot.
+
+Do not substitute a paid image-search API as the primary default.
+
+## 10.1 Primary image generation method
+
+Construct an image query by combining:
+
+```text
+barcode + " " + product_name
+```
+
+Normalize leading/trailing whitespace and repeated whitespace.
+
+Example:
+
+```text
+Barcode:
+6767647641365
+
+Product Name:
+10 Colour Flame Candles
+```
+
+Combined search query:
+
+```text
+6767647641365 10 Colour Flame Candles
+```
+
+URL/form-encoded query:
+
+```text
+6767647641365+10+Colour+Flame+Candles
+```
+
+Construct the Bing thumbnail URL:
+
+```text
+https://tse1.mm.bing.net/th?q=6767647641365+10+Colour+Flame+Candles
+```
+
+General formula:
+
+```text
+https://tse1.mm.bing.net/th?q={URL_ENCODED_BARCODE_AND_PRODUCT_NAME}
+```
+
+Use UTF-8 form-style URL encoding so spaces become `+` and special characters are encoded correctly.
+
+Do not double-encode the query.
+
+## 10.2 Required implementation
+
+Create an isolated utility named approximately:
+
+```text
+BingThumbnailUrlBuilder
+```
+
+With behavior equivalent to:
+
+```kotlin
+fun buildDefaultProductImageUrl(
+    barcode: String,
+    productName: String
+): String? {
+    val query = listOf(
+        barcode.trim(),
+        productName.trim()
+    )
+        .filter { it.isNotBlank() }
+        .joinToString(" ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+    if (query.isBlank()) return null
+
+    val encoded = java.net.URLEncoder.encode(
+        query,
+        Charsets.UTF_8.name()
+    )
+
+    return "https://tse1.mm.bing.net/th?q=$encoded"
+}
+```
+
+Use this as the canonical automatic URL builder.
+
+The implementation may be moved into a dedicated image service, but its behavior must remain the same.
+
+## 10.3 Important endpoint distinction
+
+The `tse1.mm.bing.net/th?q=` URL is a Bing thumbnail-service URL pattern, not the retired Bing Search REST API.
+
+Do not require a Bing Search API subscription key to construct the URL.
+
+Do not invent an API contract, search result JSON, image ranking, or guaranteed product match.
+
+The endpoint is an external service that may change, restrict access, fail, or return a loosely related image.
+
+Therefore:
+
+- Treat generated URLs as image candidates.
+- Attempt to load the candidate.
+- Verify successful image decoding.
+- Reject non-image or unusable responses.
+- Apply appropriate network timeouts.
+- Use standard image caching.
+- Never block product saving.
+- Never silently display an unrelated image as confirmed product identity.
+
+Do not create a web scraper.
+
+Do not claim the thumbnail is guaranteed to be the exact product.
+
+## 10.4 Default behavior
+
+Whenever a product is created with a barcode and name:
+
+1. Build the automatic URL.
+2. Show an image-loading placeholder.
+3. Attempt to display the image.
+4. If the image loads, display it as the suggested product image.
+5. If the image fails, display a neutral fallback.
+6. Allow the user to save regardless.
+
+If the generated image is confirmed usable, it may be stored as photo_url.
+
+If it is unusable, store an empty photo_url rather than falsely presenting a broken URL as a verified image.
+
+Provide an explicit retry/refresh-image action when appropriate.
+
+## 10.5 Three supported image sources
+
+Every product must support:
+
+### Source A — Automatic Bing thumbnail
+
+Default behavior.
+
+Generated from:
+
+```text
+barcode + product name
+```
+
+No manual image searching required.
+
+### Source B — Paste custom URL
+
+Provide a clear action:
+
+**Paste Image URL**
+
+Allow the user to enter a direct HTTPS image URL.
+
+Validate its syntax.
+
+Try loading the image.
+
+Display a preview when possible.
+
+If the URL is syntactically valid but temporarily unreachable, explain the limitation without deleting the user's input.
+
+The user must be able to confirm or correct the URL.
+
+### Source C — Upload image
+
+Provide an action:
+
+**Upload Image**
+
+Use Android's system Photo Picker.
+
+Allow the user to select an existing image from the device.
+
+Implement:
+
+- Safe file selection.
+- Image type validation.
+- Maximum file size.
+- Image decoding.
+- Optional resizing/compression.
+- Upload progress.
+- Recoverable upload errors.
+- Storage of the resulting hosted image URL.
+
+Use the trusted gateway and a clearly documented image-storage implementation.
+
+Prefer existing authorized Google Drive storage for binary uploads when its access and serving behavior can be implemented reliably.
+
+A Drive preview page is not automatically a direct image URL.
+
+The implementation must ensure the stored image reference is resolvable by the application's image loader, either through an appropriate image-serving mechanism or a documented authenticated image fetcher.
+
+Do not expose spreadsheet-owner credentials or private Google Drive access tokens.
+
+Do not make uploaded images publicly accessible without the business owner's explicit configuration and understanding of the exposure.
+
+If a private authenticated asset-fetch mechanism is required, implement it without introducing a second business datastore.
+
+## 10.6 Image precedence
+
+The priority is:
+
+```text
+1. User-uploaded image
+2. User-pasted image URL
+3. Automatically generated Bing thumbnail
+4. Neutral placeholder
+```
+
+A manual override must not be replaced by automatic image generation.
+
+The hierarchy applies to the currently chosen image; the application does not need multiple image columns.
+
+## 10.7 Image persistence
+
+Products.photo_url is the authoritative image reference.
+
+Store only one URL.
+
+Do not store image bytes in Google Sheets.
+
+Do not introduce additional image-source columns.
+
+When the user chooses a manual image:
+
+- Replace photo_url with the chosen URL.
+- Preserve it during subsequent product edits.
+- Do not regenerate it automatically.
+
+When no manual override exists:
+
+- The default URL may be updated when barcode or product name changes.
+
+To distinguish an existing automatic URL from an override without adding schema columns, compare the existing photo_url with the URL generated from the previous barcode and product name.
+
+If the existing URL matches the previous generated default, it may be regenerated.
+
+Otherwise, preserve the image URL as a manual override.
+
+## 10.8 Removing an override
+
+Provide:
+
+**Use Automatic Image**
+
+When selected:
+
+1. Remove the current manual choice from the product form.
+2. Regenerate the default image URL.
+3. Attempt loading the new candidate.
+4. Display the preview or fallback.
+5. Save the resulting photo_url on confirmation.
+
+Do not delete a previously uploaded binary object as an unintended side effect of simply changing product details.
+
+## 10.9 Image editing UX
+
+The product form should show:
+
+```text
+Product Photo
+
+[ Image Preview ]
+
+[ Use Automatic ] [ Paste URL ] [ Upload ]
+```
+
+Use a clean and touch-friendly arrangement.
+
+Avoid unnecessary dialogs.
+
+On successful image selection, update the preview immediately.
+
+Use concise error messages.
+
+Examples:
+
+```text
+Image unavailable
+Invalid image URL
+Upload failed
+Image updated
+Using automatic image
+```
+
+## 10.10 Image performance
+
+- Use Coil.
+- Cache images.
+- Avoid repeated network requests.
+- Use a fixed or bounded image-preview size.
+- Preserve layout while images load.
+- Provide fallback placeholders.
+- Avoid downloading oversized image assets.
+- Do not refresh every product image on every screen navigation.
+- Cancel obsolete image requests when inputs change.
+- Do not regenerate manual URLs.
+
+## 10.11 Image tests
+
+Test:
+
+- Barcode + name combination.
+- UTF-8 encoding.
+- Space-to-plus encoding.
+- Leading-zero barcode preservation.
+- Special characters in names.
+- Empty barcode.
+- Empty product name.
+- Both fields empty.
+- Default URL generation.
+- Broken thumbnail URL.
+- Non-image response.
+- Manual URL replacement.
+- Image upload.
+- Manual URL persistence.
+- Automatic regeneration after relevant edits.
+- Image cache behavior.
+- Save despite failed image loading.
+
+The default image flow must work without requiring a paid image-search API.
+
+---
+
+# 11. CUSTOMER MANAGEMENT
+
+Implement:
+
+- Customer list.
+- Customer search.
+- Create customer.
+- View customer.
+- Edit customer.
+- Delete unreferenced customer.
+- Select customer during invoice creation.
+
+Fields:
+
+```text
+Business Name
+Contact
+Address
+Phone
+```
+
+Keep customer creation extremely simple.
+
+Avoid unnecessary details.
+
+From an invoice:
+
+1. Tap customer selection.
+2. Search existing customers.
+3. Select a customer.
+
+Alternatively:
+
+1. Select Add Customer.
+2. Enter required details.
+3. Save.
+4. Return directly to invoice.
+5. Automatically select the new customer.
+
+Preserve the invoice draft throughout.
+
+Never force staff to start the invoice again.
+
+---
+
+# 12. SUPPLIER MANAGEMENT
+
+Implement:
+
+- Supplier list.
+- Search supplier.
+- Create supplier.
+- View supplier.
+- Edit supplier.
+- Delete when safe.
+
+Fields:
+
+```text
+Supplier Name
+Contact
+```
+
+Supplier selection must integrate with purchase creation.
+
+Do not build supplier balances, bills, credits, or payable accounting.
+
+---
+
+# 13. PURCHASE MANAGEMENT
+
+Purchases are administrative inventory-increase operations.
+
+## 13.1 Interface
+
+Create a minimal form:
+
+```text
+Supplier
+Product
+Quantity
+Unit Cost
+Date
+
+[ Save Purchase ]
+```
+
+## 13.2 Save behavior
+
+Upon saving:
+
+- Validate administrator role.
+- Validate required fields.
+- Verify product and supplier.
+- Verify positive quantity.
+- Acquire server mutation lock.
+- Reject duplicate purchase UUID.
+- Record purchase.
+- Increase product stock.
+- Commit consistently.
+- Refresh stock.
+- Display success.
+
+## 13.3 Corrections
+
+Allow authorized purchase correction.
+
+If quantity changes from 10 to 7, inventory must decrease by 3, subject to sufficient stock.
+
+Do not add the new quantity as a second purchase.
+
+If a purchase is reversed, remove its stock contribution once.
+
+Preserve reliable auditability through the original purchase identity and transaction history.
+
+Reject corrections that would produce negative stock.
+
+---
+
+# 14. INVOICE MANAGEMENT
+
+Invoice creation is the core commercial workflow.
+
+## 14.1 Navigation
+
+```text
+Invoices
+   ↓
+New Invoice
+   ↓
+Select Customer
+   ↓
+Add Products
+   ↓
+Adjust Quantities
+   ↓
+Review Invoice
+   ↓
+Save Invoice
+   ↓
+View / Print
+```
+
+Minimize screen transitions.
+
+## 14.2 Invoice composer
+
+Show:
+
+- Selected customer.
+- Product search.
+- Product results.
+- Selected products.
+- Quantity controls.
+- Unit prices.
+- Line totals.
+- Subtotal.
+- VAT total.
+- Grand total.
+- Primary Save action.
+
+The grand total should remain prominent.
+
+Avoid tiny buttons and dense rows.
+
+## 14.3 Product selection
+
+Allow searching by name or barcode.
+
+Tapping a product adds it to the invoice.
+
+If already selected, use predictable quantity behavior instead of silently creating ambiguous duplicate lines.
+
+Clearly display available stock.
+
+Do not assume displayed stock remains unchanged until final submission.
+
+## 14.4 Quantity controls
+
+Provide:
+
+- Increase.
+- Decrease.
+- Direct numeric input.
+- Remove line.
+
+Update locally calculated totals immediately.
+
+Do not send a Sheets request for every quantity tap.
+
+The trusted gateway must validate the final invoice before saving.
+
+## 14.5 Invoice review
+
+Show:
+
+```text
+Customer
+Date
+Invoice Items
+Subtotal
+VAT
+Grand Total
+```
+
+Provide:
+
+```text
+[ Save Invoice ]
+```
+
+Do not make staff navigate through unnecessary confirmation screens.
+
+## 14.6 Save behavior
+
+- Show progress.
+- Disable duplicate submission.
+- Preserve the draft.
+- Revalidate server-side stock.
+- Revalidate prices and VAT.
+- Persist header and lines.
+- Decrease inventory atomically.
+- Return confirmed invoice data.
+- Navigate to invoice details.
+
+Do not show success until the gateway confirms the transaction.
+
+If final authoritative values differ from the draft, show the differences and obtain the user's confirmation rather than silently changing the sale.
+
+## 14.7 After saving
+
+Display:
+
+- Invoice number.
+- Customer.
+- Date.
+- Items.
+- Subtotal.
+- VAT.
+- Grand total.
+- Print Receipt action.
+
+Use a straightforward hierarchy.
+
+## 14.8 Invoice history
+
+Provide an invoice list with:
+
+- Invoice number.
+- Customer.
+- Date.
+- Total.
+- Status.
+
+Allow tapping an invoice to view it.
+
+Use simple searching or filtering only as needed for reasonable usability.
+
+## 14.9 Editing and cancellation
+
+Unsaved invoices can be freely edited.
+
+Posted invoices are historical financial records.
+
+For posted changes:
+
+- Admin must void the original.
+- Inventory must be restored exactly once.
+- A replacement invoice may be created using the original as a starting point.
+- The replacement receives its own identifier.
+- The original remains visible as VOID.
+
+Do not physically delete a posted invoice.
+
+Do not silently overwrite historical invoice lines.
+
+---
+
+# 15. BLUETOOTH THERMAL RECEIPT PRINTING
+
+Implement actual Bluetooth Classic ESC/POS printing for supported printers.
+
+## 15.1 Required capabilities
+
+- Discover/select paired printers.
+- Handle Bluetooth permissions.
+- Remember preferred printer.
+- Connect to printer.
+- Generate receipt bytes.
+- Send print commands.
+- Handle connection errors.
+- Report completion or failure.
+- Retry printing.
+- Reprint existing invoices.
+
+Use a maintained library where appropriate.
+
+Printer transport must be abstracted sufficiently for testing.
+
+## 15.2 Receipt layout
+
+Generate a clean thermal receipt containing:
+
+```text
+KANAK
+
+Configured Business Name
+Configured Business Address
+VAT Number (when applicable)
+
+--------------------------------
+Invoice: 000001
+Date: YYYY-MM-DD HH:mm
+Customer: Example Store
+--------------------------------
+
+Product         Qty      Total
+--------------------------------
+Product A         2      2.200
+Product B         1      1.500
+
+--------------------------------
+Subtotal                 3.364
+VAT                      0.336
+TOTAL              BHD   3.700
+--------------------------------
+
+Thank you
+```
+
+The values shown are illustrative.
+
+Actual receipts must use the exact saved invoice amounts.
+
+## 15.3 Printer formatting
+
+Support practical 58 mm receipt layouts.
+
+Keep the layout adaptable to compatible 80 mm printers.
+
+Handle:
+
+- Long product names.
+- Numeric alignment.
+- Decimal precision.
+- Line wrapping.
+- Character encoding.
+- Date formatting.
+- Printer disconnects.
+
+Use safe printer commands.
+
+Do not assume every Bluetooth printer implements identical ESC/POS behavior.
+
+## 15.4 Printing workflow
+
+After saving an invoice:
+
+```text
+Invoice Saved
+
+[ Print Receipt ]
+```
+
+If printing fails:
+
+```text
+Unable to print
+Check printer connection
+
+[ Retry Print ]
+```
+
+A failed print must not:
+
+- Delete the invoice.
+- Change stock.
+- Create another invoice.
+- Modify financial totals.
+
+Do not claim successful physical printing without device confirmation.
+
+Document the printer compatibility boundary.
+
+---
+
+# 16. STOCK VIEW AND ADMIN ADJUSTMENTS
+
+## 16.1 Stock screen
+
+Display a searchable list:
+
+```text
+Product Name
+Barcode
+Available Stock
+```
+
+Keep the screen simple.
+
+All authenticated authorized users may view stock.
+
+## 16.2 Admin adjustments
+
+Provide an Adjust Stock action for admins.
+
+Show:
+
+```text
+Product
+Current Quantity
+Adjustment Direction
+Adjustment Quantity
+Resulting Quantity
+Reason
+
+[ Confirm Adjustment ]
+```
+
+Adjustment direction:
+
+- Increase.
+- Decrease.
+
+Store the resulting signed delta in StockAdjustments.
+
+Apply the stock update through the same protected gateway used by purchases and invoices.
+
+## 16.3 Safety
+
+- Reject negative resulting stock.
+- Reject invalid quantities.
+- Require a reason.
+- Persist the adjustment record.
+- Refresh stock after success.
+- Prevent duplicate effects.
+- Do not permit direct stock_qty overwrites.
+
+---
+
+# 17. DAILY SALES DASHBOARD
+
+The dashboard is the primary home screen.
+
+Display exactly:
+
+1. Today's Sales Total.
+2. Today's Invoice Count.
+3. Top-Selling Products.
+
+No speculative business KPIs.
+
+## 17.1 Timezone
+
+Use:
+
+```text
+Asia/Bahrain
+```
+
+Store canonical timestamps in UTC.
+
+Determine the business day using Bahrain-local midnight boundaries.
+
+## 17.2 Sales total
+
+Calculate:
+
+```text
+SUM(total)
+for POSTED invoices
+dated within today's Bahrain-local day
+```
+
+Exclude VOID invoices.
+
+## 17.3 Invoice count
+
+Count successful POSTED invoices for the current Bahrain-local date.
+
+## 17.4 Top-selling products
+
+Aggregate nonvoid invoice lines by product.
+
+Rank by quantity sold today.
+
+Use deterministic tie-breaking.
+
+## 17.5 Dashboard design
+
+Use large, clear numeric displays.
+
+Show BHD with three decimals.
+
+Display top products in a clean compact list.
+
+Do not introduce decorative analytics charts.
+
+Use clear loading, empty, and error states.
+
+---
+
+# 18. APPLE-INSPIRED ANDROID DESIGN SYSTEM
+
+The application should feel exceptionally polished and effortless.
+
+Interpret Apple's design principles rather than copying iOS components.
+
+Preserve native Android navigation, accessibility, and interaction expectations.
+
+## 18.1 Core principles
+
+### Clarity
+
+Information must be readable and easy to understand.
+
+### Deference
+
+The interface supports the content rather than competing with it.
+
+### Depth
+
+Use restrained hierarchy and spatial relationships to communicate meaning.
+
+### Direct Manipulation
+
+Controls react predictably to touch.
+
+### Immediate Response
+
+Provide interaction feedback as soon as the action begins.
+
+### Consistency
+
+Similar controls behave the same throughout the application.
+
+### Simplicity
+
+Remove unnecessary controls and visual clutter.
+
+---
+
+# 19. VISUAL SYSTEM
+
+## 19.1 Colors
+
+Use a restrained neutral palette.
+
+Suggested semantic tokens:
+
+```text
+background
+surface
+surfaceVariant
+textPrimary
+textSecondary
+accent
+success
+warning
+error
+divider
+```
+
+Suggested default appearance:
+
+- Warm near-white background.
+- Clean white surfaces.
+- Near-black primary text.
+- Muted gray supporting text.
+- Restrained blue accent.
+- Subtle green for success.
+- Clear but restrained red for errors.
+
+Support corresponding dark-theme tokens.
+
+Ensure sufficient contrast.
+
+Do not use excessive gradients or decorative glowing effects.
+
+## 19.2 Typography
+
+Use the Android system typeface.
+
+Define:
+
+- Large screen title.
+- Section heading.
+- Body.
+- Supporting body.
+- Caption.
+- Financial amount.
+
+Respect font scaling.
+
+Use tabular number alignment where supported.
+
+Avoid introducing custom fonts without a functional reason.
+
+Maintain legible tracking and line spacing appropriate to each text size.
+
+## 19.3 Layout
+
+Use:
+
+- Generous spacing.
+- Simple vertical hierarchy.
+- Consistent page margins.
+- Clean cards only when necessary.
+- Restrained corner radii.
+- Clear grouping.
+- Comfortable touch targets.
+- Minimal separators.
+
+Avoid unnecessarily nested cards.
+
+## 19.4 Translucent chrome
+
+Apply subtle translucent top or bottom navigation surfaces only where they materially improve polish.
+
+Maintain readable contrast over scrolling content.
+
+Provide opaque alternatives where transparency reduces performance, readability, or accessibility.
+
+Do not build expensive blur effects purely for decoration.
+
+---
+
+# 20. INTERACTION AND MOTION
+
+## 20.1 Touch-down response
+
+Every pressable control must provide prompt pressed-state feedback.
+
+Use Compose interaction primitives and appropriate InteractionSource handling.
+
+Do not delay visual feedback until a network operation finishes.
+
+Do not trigger irreversible business mutations merely on touch-down.
+
+A press should visually respond immediately, while the actual action follows standard successful tap completion and cancellation semantics.
+
+## 20.2 Gestures
+
+Where direct manipulation exists:
+
+- Track movement naturally.
+- Avoid jumpy positions.
+- Preserve spatial correspondence.
+- Support interruption.
+- Respect gesture cancellation.
+- Avoid unnecessary gestures.
+
+Do not implement swipe actions merely to make the UI appear sophisticated.
+
+## 20.3 Animation
+
+Use Compose spring animations when appropriate.
+
+Default to approximately critically damped behavior.
+
+Use moderately less damping, around 0.8, only where momentum improves comprehension.
+
+Avoid bouncing important financial actions.
+
+Avoid long animations.
+
+## 20.4 Reduced motion
+
+Respect Android animation-scale and accessibility preferences.
+
+Use reduced or immediate transitions when motion is disabled.
+
+Do not make business functionality depend on animation.
+
+## 20.5 Screen state
+
+Preserve important user-entered state during:
+
+- Rotation where supported.
+- Activity recreation.
+- Temporary navigation.
+- Keyboard appearance.
+- Recoverable network errors.
+
+Do not silently clear a partially composed invoice.
+
+---
+
+# 21. NAVIGATION ARCHITECTURE
+
+Use five primary bottom-navigation destinations:
+
+```text
+Home
+Products
+Customers
+Invoices
+Stock
+```
+
+Use clear icons with visible labels.
+
+Keep administrative supplier and purchase management contextually accessible from the stock area or a minimal overflow/menu surface.
+
+Account and printer preferences belong in Settings.
+
+Avoid more primary tabs than necessary.
+
+Use list-to-detail navigation.
+
+Respect Android Back navigation.
+
+Do not create complex nested navigation stacks.
+
+---
+
+# 22. REQUIRED SCREEN INVENTORY
+
+Implement all of the following.
+
+## Authentication
+
+- Sign-in screen.
+- Google account selector.
+- Authorization-denied state.
+- Expired-session recovery.
+
+## Home
+
+- Daily sales total.
+- Invoice count.
+- Top products.
+
+## Products
+
+- Product list.
+- Product search.
+- Product detail.
+- Add product.
+- Edit product.
+- Delete confirmation.
+- Automatic product photo.
+- Paste image URL.
+- Upload image.
+- Reset image to automatic.
+
+## Customers
+
+- Customer list.
+- Customer detail.
+- Add customer.
+- Edit customer.
+- Delete confirmation.
+- Invoice customer selection.
+
+## Suppliers
+
+- Supplier list.
+- Supplier detail.
+- Add supplier.
+- Edit supplier.
+- Delete confirmation.
+
+## Purchases
+
+- Purchase list.
+- Purchase entry.
+- Purchase correction.
+- Purchase reversal.
+- Permission-denied behavior.
+
+## Invoices
+
+- Invoice list.
+- Invoice detail.
+- New invoice composer.
+- Product selection.
+- Quantity editing.
+- Invoice review.
+- Save progress.
+- Print receipt.
+- Admin void confirmation.
+
+## Stock
+
+- Stock list.
+- Product stock detail.
+- Admin adjustment.
+- Adjustment confirmation.
+
+## Settings
+
+- Signed-in account.
+- Sign out.
+- Paired printer selection.
+- Preferred printer.
+- Printer test/connection status.
+- Configuration error information.
+
+No additional business modules.
+
+---
+
+# 23. UI STATE AND NETWORK BEHAVIOR
+
+Use explicit UI states.
+
+```text
+Idle
+Loading
+Success
+Error
+```
+
+For mutations:
+
+1. Validate locally.
+2. Show pending feedback.
+3. Send the request.
+4. Validate server response.
+5. Refresh or reconcile affected records.
+6. Display success or failure.
+
+Do not block the main thread.
+
+Do not display stale data as newly committed.
+
+Use local read caching solely for performance.
+
+## 23.1 Errors
+
+Handle:
+
+- No internet.
+- Invalid authentication.
+- Expired identity token.
+- Inactive account.
+- Permission denial.
+- Missing spreadsheet.
+- Missing worksheet.
+- Invalid headers.
+- API quota exhaustion.
+- Timeout.
+- Duplicate request.
+- Invalid barcode.
+- Negative price.
+- Invalid quantity.
+- Insufficient stock.
+- Concurrent stock changes.
+- Image-loading failure.
+- Image-upload failure.
+- Printer disconnected.
+- Printer unsupported.
+- Receipt transmission failure.
+
+Do not silently swallow exceptions.
+
+Preserve user input where recovery is possible.
+
+## 23.2 Feedback messages
+
+Use short messages:
+
+```text
+Product saved
+Customer created
+Purchase recorded
+Invoice saved
+Stock updated
+Image unavailable
+Upload failed
+Access denied
+Unable to connect
+Printer disconnected
+```
+
+Use Snackbars or equivalent native feedback.
+
+Avoid unnecessary confirmation dialogs.
+
+Confirm destructive or historically significant actions.
+
+---
+
+# 24. PERFORMANCE
+
+Optimize for responsive everyday mobile use.
+
+Implement:
+
+- Efficient Compose state handling.
+- Stable list keys.
+- Minimal unnecessary recomposition.
+- Coroutines for background tasks.
+- Local catalogue filtering.
+- Controlled network concurrency.
+- Batched Sheets access.
+- Image caching.
+- Reusable printer connection handling.
+- Clear loading states.
+- Bounded retries.
+- Backoff for recoverable Google API failures.
+
+Do not perform a network request on every UI tap when the operation can be handled locally until submission.
+
+Do not refetch the entire spreadsheet unnecessarily.
+
+Do not add sophisticated pagination unless real data volume requires it.
+
+Do not add full offline-first synchronization.
+
+---
+
+# 25. PROJECT STRUCTURE
+
+Generate a complete, self-contained Android project.
+
+Recommended structure:
+
+```text
+Kanak/
+│
+├── README.md
+├── settings.gradle.kts
+├── build.gradle.kts
+├── gradle.properties
+├── gradlew
+├── gradlew.bat
+│
+├── gradle/
+│   ├── libs.versions.toml
+│   └── wrapper/
+│
+├── app/
+│   ├── build.gradle.kts
+│   └── src/
+│       ├── main/
+│       │   ├── AndroidManifest.xml
+│       │   ├── java/com/kanak/app/
+│       │   │   ├── MainActivity.kt
+│       │   │   ├── KanakApplication.kt
+│       │   │   │
+│       │   │   ├── auth/
+│       │   │   │   ├── GoogleAuthManager.kt
+│       │   │   │   └── SessionManager.kt
+│       │   │   │
+│       │   │   ├── domain/
+│       │   │   │   ├── models/
+│       │   │   │   ├── validation/
+│       │   │   │   └── usecases/
+│       │   │   │
+│       │   │   ├── data/
+│       │   │   │   ├── remote/
+│       │   │   │   ├── repository/
+│       │   │   │   └── mapper/
+│       │   │   │
+│       │   │   ├── images/
+│       │   │   │   ├── BingThumbnailUrlBuilder.kt
+│       │   │   │   ├── ProductImageManager.kt
+│       │   │   │   └── ImageUploadClient.kt
+│       │   │   │
+│       │   │   ├── printing/
+│       │   │   │   ├── BluetoothPrinterManager.kt
+│       │   │   │   ├── EscPosReceiptRenderer.kt
+│       │   │   │   └── PrinterTransport.kt
+│       │   │   │
+│       │   │   ├── navigation/
+│       │   │   │
+│       │   │   └── ui/
+│       │   │       ├── theme/
+│       │   │       ├── components/
+│       │   │       ├── dashboard/
+│       │   │       ├── products/
+│       │   │       ├── customers/
+│       │   │       ├── suppliers/
+│       │   │       ├── purchases/
+│       │   │       ├── invoices/
+│       │   │       ├── stock/
+│       │   │       └── settings/
+│       │   │
+│       │   └── res/
+│       │
+│       ├── test/
+│       └── androidTest/
+│
+├── apps-script/
+│   ├── appsscript.json
+│   ├── Code.gs
+│   ├── Auth.gs
+│   ├── SheetsRepository.gs
+│   ├── Inventory.gs
+│   ├── Invoices.gs
+│   ├── Images.gs
+│   └── Schema.gs
+│
+└── docs/
+    ├── SHEETS_SCHEMA.md
+    ├── GOOGLE_SETUP.md
+    ├── IMAGE_HANDLING.md
+    ├── PRINTER_SETUP.md
+    ├── SECURITY.md
+    └── VERIFICATION.md
+```
+
+These filenames are illustrative.
+
+Use the smallest maintainable structure that satisfies the requirements.
+
+All referenced production files must contain real implementations.
+
+---
+
+# 26. GOOGLE CLOUD AND SHEETS SETUP
+
+The README must explain the complete setup.
+
+## 26.1 Google Cloud
+
+Document:
+
+1. Create Google Cloud project.
+2. Configure OAuth consent screen.
+3. Configure Android OAuth client.
+4. Register application package name.
+5. Configure signing certificate fingerprint.
+6. Configure the backend's OAuth client identity.
+7. Enable required APIs.
+8. Configure authentication consent/testing.
+9. Configure the Sheets integration.
+
+Do not embed secrets in source code.
+
+## 26.2 Google Sheets
+
+Document:
+
+1. Create spreadsheet.
+2. Create eight worksheets.
+3. Insert exact headers.
+4. Protect required ranges.
+5. Configure spreadsheet ownership.
+6. Record spreadsheet ID.
+7. Provision admin user.
+8. Provision standard users.
+9. Verify Users sheet role values.
+
+Provide reproducible setup scripts where appropriate.
+
+## 26.3 Apps Script gateway
+
+Document:
+
+1. Create or link Apps Script project.
+2. Add gateway source files.
+3. Enable required Sheets service/API.
+4. Configure server-side settings.
+5. Configure token verification.
+6. Configure authorization.
+7. Configure image upload storage.
+8. Deploy the web app.
+9. Obtain deployment URL.
+10. Test authenticated and unauthorized requests.
+11. Confirm permissions.
+12. Configure Android endpoint.
+13. Verify spreadsheet mutations.
+
+Do not place privileged authorization tokens in the APK.
+
+If using an Apps Script owner-executed public web-app endpoint, all application requests must still receive server-side Google identity verification and authorization.
+
+Document that a publicly reachable deployment endpoint is not itself an authentication mechanism.
+
+## 26.4 Image handling setup
+
+For the default automatic images:
+
+**No Bing Search API key is required.**
+
+Document:
+
+```text
+Default pattern:
+https://tse1.mm.bing.net/th?q={encoded_query}
+```
+
+Explain:
+
+- Barcode and product name concatenation.
+- Encoding.
+- Preview.
+- Endpoint limitations.
+- Manual image URL.
+- Image upload.
+- Storage configuration.
+- Image access permissions.
+- Failure fallback.
+
+Do not claim that image-search results are guaranteed correct or licensed for reuse.
+
+## 26.5 Printer setup
+
+Document:
+
+- Supported Android Bluetooth requirements.
+- Runtime permissions.
+- Pairing.
+- Selecting a printer.
+- ESC/POS compatibility.
+- Printing a saved invoice.
+- Retrying failed printing.
+- Troubleshooting common errors.
+
+## 26.6 Build instructions
+
+Include:
+
+- Required Android SDK.
+- Required JDK.
+- Gradle wrapper.
+- Configuration placeholders.
+- Build commands.
+- Debug installation.
+- Test commands.
+- Release signing prerequisites.
+
+A developer must be able to open the project in Android Studio and follow the README without guessing undocumented configuration steps.
+
+---
+
+# 27. REQUIRED TESTS
+
+Testing is mandatory.
+
+## 27.1 Financial unit tests
+
+Verify:
+
+- BHD precision.
+- VAT-inclusive calculations.
+- Zero-rated products.
+- Standard VAT.
+- Fractional quantities.
+- Rounding.
+- Mixed VAT rates.
+- Invoice reconciliation.
+- Date boundaries.
+
+## 27.2 Image tests
+
+Verify:
+
+- Default URL builder.
+- Exact screenshot-style query.
+- Encoding special characters.
+- Invalid responses.
+- Manual URL override.
+- User upload.
+- Automatic regeneration.
+- Preservation of manual selection.
+- Fallback behavior.
+- Nonblocking save.
+
+## 27.3 Authentication tests
+
+Verify:
+
+- Valid Google identity.
+- Invalid identity.
+- Expired identity.
+- Unknown user.
+- Inactive user.
+- Standard permissions.
+- Admin permissions.
+- Forged role rejection.
+
+## 27.4 Inventory tests
+
+Verify:
+
+- Purchase stock increase.
+- Purchase correction delta.
+- Purchase reversal.
+- Invoice stock decrease.
+- Invoice cancellation reversal.
+- Negative stock rejection.
+- Concurrent sale protection.
+- Idempotent retries.
+- No partial transaction writes.
+
+## 27.5 CRUD tests
+
+Verify:
+
+- Create.
+- Read.
+- Update.
+- Delete where valid.
+- Duplicate prevention.
+- Referential integrity.
+- Missing record handling.
+- Sheet header validation.
+
+## 27.6 UI tests
+
+Verify:
+
+- Navigation.
+- Product creation.
+- Customer creation.
+- Image selection.
+- Invoice creation.
+- Quantity controls.
+- Total updates.
+- Saving feedback.
+- Error recovery.
+- Admin-only controls.
+- Accessibility semantics.
+- Back navigation.
+
+## 27.7 Printing tests
+
+Verify:
+
+- Receipt formatting.
+- BHD decimals.
+- Text alignment.
+- Long product names.
+- ESC/POS byte generation.
+- Connection failures.
+- Print retries.
+- No duplicate invoices after retry.
+
+Physical printer testing must be reported separately from simulated transport tests.
+
+## 27.8 Build checks
+
+Execute applicable commands:
+
+```text
+Gradle dependency resolution
+Kotlin compilation
+Android resource compilation
+Static analysis
+Unit tests
+Debug APK build
+Instrumentation tests where available
+```
+
+Record actual results.
+
+Do not fabricate passing tests.
+
+---
+
+# 28. REQUIRED IMPLEMENTATION ORDER
+
+Use the following sequence.
+
+## Phase 1 — Discovery
+
+- Inspect project files.
+- Inspect repository state.
+- Determine existing dependencies.
+- Verify Android build environment.
+- Preserve valid existing work.
+
+## Phase 2 — Data foundation
+
+- Implement models.
+- Define exact schemas.
+- Implement validators.
+- Implement monetary calculations.
+- Implement schema initialization.
+
+## Phase 3 — Authentication and gateway
+
+- Implement Credential Manager authentication.
+- Implement identity verification.
+- Implement Users role checks.
+- Implement Sheets repositories.
+- Enforce authorization.
+
+## Phase 4 — Inventory transactions
+
+- Implement locking.
+- Implement atomic batch writes.
+- Implement purchase stock updates.
+- Implement invoice stock updates.
+- Implement idempotency.
+- Implement void/reversal logic.
+
+Test transactional behavior before polishing UI.
+
+## Phase 5 — Core screens
+
+Implement:
+
+- Home.
+- Products.
+- Customers.
+- Suppliers.
+- Purchases.
+- Invoices.
+- Stock.
+- Settings.
+
+All screens must be connected to actual repositories.
+
+## Phase 6 — Product image integration
+
+Implement:
+
+- Bing thumbnail URL builder.
+- Automatic product photo preview.
+- Manual URL option.
+- Image upload.
+- Image persistence.
+- Override precedence.
+- Failure fallback.
+
+## Phase 7 — Printing
+
+Implement:
+
+- Printer discovery and selection.
+- Bluetooth connection.
+- Receipt rendering.
+- Receipt transmission.
+- Failure handling.
+- Reprinting.
+
+## Phase 8 — UX refinement
+
+Implement:
+
+- Theme.
+- Typography.
+- Touch feedback.
+- Motion.
+- Form improvements.
+- Accessibility.
+- Loading feedback.
+- Empty states.
+- Error recovery.
+
+## Phase 9 — Verification
+
+Run tests and builds.
+
+Investigate actual failures.
+
+Fix root causes before unrelated visual improvements.
+
+## Phase 10 — Delivery
+
+Deliver source code, gateway, configuration templates, setup instructions, and build artifacts when successfully generated.
+
+Do not stop with a development plan.
+
+---
+
+# 29. FAILURE AND UNCERTAINTY HANDLING
+
+## 29.1 Missing Google credentials
+
+Generate clear placeholders.
+
+Document exact setup steps.
+
+Do not invent credentials.
+
+Do not claim authentication is verified without configuration.
+
+## 29.2 Missing spreadsheet
+
+Show a configuration error.
+
+Do not silently substitute mock production data.
+
+## 29.3 Bing thumbnail unavailable
+
+- Show fallback image.
+- Preserve form contents.
+- Allow custom URL.
+- Allow upload.
+- Allow saving.
+- Document the external service limitation.
+
+Do not silently substitute an unrelated paid search service.
+
+## 29.4 Upload unavailable
+
+- Keep automatic image support.
+- Keep pasted URL support.
+- Display clear upload error.
+- Document missing storage configuration.
+
+## 29.5 Printer unavailable
+
+- Preserve invoice.
+- Show printer error.
+- Allow retry.
+- Mark hardware compatibility unverified.
+
+## 29.6 Google API errors
+
+- Report failure clearly.
+- Retry only when safe.
+- Reconcile uncertain transaction outcomes by UUID.
+- Never duplicate inventory effects.
+
+## 29.7 Conflicting requirements
+
+Prefer:
+
+1. Security.
+2. Transaction correctness.
+3. Financial accuracy.
+4. Data integrity.
+5. Reliability.
+6. Functional completeness.
+7. User experience.
+8. Visual refinement.
+
+If a requested behavior cannot be implemented safely using the chosen architecture, explain the conflict and use the smallest valid correction without introducing unnecessary business modules.
+
+---
+
+# 30. ACCEPTANCE CRITERIA
+
+Kanak is acceptable only when all applicable conditions are satisfied.
+
+## Authentication
+
+- Google authentication implemented.
+- Session restoration implemented.
+- Unknown users rejected.
+- Inactive users rejected.
+- Roles enforced server-side.
+- Privileged credentials not exposed.
+
+## Google Sheets
+
+- Eight required worksheets.
+- Exact column headers.
+- Stable IDs.
+- Real CRUD persistence.
+- Clear schema errors.
+- No second business database.
+
+## Products
+
+- Product CRUD works.
+- Name and barcode search works.
+- BHD pricing works.
+- VAT calculation works.
+- Stock is read-only in product editing.
+- Duplicate barcodes rejected.
+
+## Product photos
+
+- Barcode and name form the default image query.
+- Screenshot-style Bing thumbnail URL is generated.
+- Generated URL is actually attempted as an image.
+- Broken URLs show placeholders.
+- Users can paste URLs.
+- Users can upload images.
+- Manual images take precedence.
+- Manual images persist through product edits.
+- Automatic images can be restored.
+- Photos never block product saving.
+- Only the image URL is stored in Sheets.
+
+## Customers
+
+- Customer CRUD works.
+- Customer selection works.
+- Customer creation from invoice preserves draft state.
+
+## Suppliers
+
+- Supplier CRUD works.
+- Supplier selection works in purchases.
+
+## Purchases
+
+- Admin-only.
+- Purchase entries persist.
+- Stock increases correctly.
+- Corrections apply deltas.
+- Reversals are safe.
+
+## Invoices
+
+- Invoice creation works.
+- Quantities can be changed.
+- Totals update immediately.
+- Server recalculates final amounts.
+- Invoice headers and lines persist consistently.
+- Stock decreases correctly.
+- Duplicate submission is prevented.
+- Historical invoice values remain stable.
+- Admin void restores stock exactly once.
+
+## Stock
+
+- Accurate current stock is visible.
+- Admin adjustments work.
+- Adjustments are recorded.
+- Negative stock is rejected.
+
+## Dashboard
+
+- Today's sales total is correct.
+- Invoice count is correct.
+- Top-selling products are correct.
+- Bahrain timezone is respected.
+- Voided invoices are excluded.
+
+## Printing
+
+- ESC/POS receipt generation works.
+- Bluetooth transport is implemented.
+- Saved invoices can be printed.
+- Print retry works.
+- Print failure does not change invoices or stock.
+- Hardware verification status is explicit.
+
+## UX/UI
+
+- Five simple primary destinations.
+- Clear screen hierarchy.
+- Clean system typography.
+- Restrained color palette.
+- Immediate pressed-state feedback.
+- Suitable spring animations.
+- Reduced-motion support.
+- Readable errors.
+- Accessible controls.
+- Preserved form state.
+- No unnecessary modules.
+
+## Engineering delivery
+
+- Complete source project.
+- Reproducible dependency setup.
+- Apps Script gateway.
+- Spreadsheet initialization instructions.
+- Image implementation documentation.
+- Printer documentation.
+- README.
+- Tests and results.
+- APK when successfully built.
+- Explicit blockers.
+- No fabricated completion claims.
+
+---
+
+# 31. FINAL VERIFICATION AND DELIVERY REPORT
+
+At completion, report the following.
+
+## A. Completion status
+
+Choose exactly one:
+
+**VERIFIED COMPLETE**
+
+All required functionality implemented and necessary verification completed.
+
+**FUNCTIONALLY COMPLETE WITH LIMITATIONS**
+
+Source and core functionality implemented, with clearly identified external validation limitations.
+
+**PARTIALLY COMPLETE**
+
+Some required functionality remains unimplemented or unverified.
+
+**BLOCKED**
+
+A genuine dependency prevents meaningful further progress.
+
+## B. Implementation summary
+
+Identify exactly what was completed.
+
+## C. Project files
+
+Identify:
+
+- Android project root.
+- Kotlin source files.
+- Apps Script gateway files.
+- Schema initialization.
+- Configuration files.
+- Documentation.
+- Generated APK, if any.
+
+## D. Verification
+
+Report actual:
+
+- Build commands.
+- Build outcome.
+- Unit tests.
+- Integration tests.
+- UI tests.
+- Printing verification.
+- Security findings.
+- Known failures.
+
+## E. External configuration
+
+List only required remaining setup actions.
+
+Examples:
+
+- Google OAuth client configuration.
+- Spreadsheet ID.
+- Apps Script deployment URL.
+- Admin provisioning.
+- Image-upload storage configuration.
+- Bluetooth printer pairing.
+
+## F. Exact next action
+
+Identify the minimum action required to activate or finish any remaining integration.
+
+---
+
+# 32. FINAL NON-NEGOTIABLE ENGINEERING RULES
+
+1. Implement the complete Android application rather than delivering only an architecture.
+2. Keep Google Sheets as the authoritative business datastore.
+3. Never expose spreadsheet-owner credentials to staff devices.
+4. Authenticate with Google.
+5. Enforce roles on the server.
+6. Preserve correct inventory under concurrent operations.
+7. Use exact BHD financial calculations.
+8. Apply product-specific VAT correctly.
+9. Protect historical financial records.
+10. Prevent duplicate invoice and purchase effects.
+11. Implement all requested CRUD operations with appropriate historical-record safeguards.
+12. Use the barcode-plus-product-name Bing thumbnail URL as the default product-image mechanism.
+13. Support pasted image URLs.
+14. Support user image uploads.
+15. Preserve manual image overrides.
+16. Never let product-image failures block saving.
+17. Implement functional invoice receipt rendering and Bluetooth printing.
+18. Ensure print failures never affect committed invoices.
+19. Deliver exceptionally simple navigation and user-friendly workflows.
+20. Use Apple-inspired interaction quality while respecting Android conventions.
+21. Do not introduce unrequested business modules.
+22. Do not silently swallow errors.
+23. Do not fabricate credentials, API behavior, test results, or completion evidence.
+24. Build, validate, and test the implementation wherever tools allow.
+25. Deliver a complete, ready-to-configure, maintainable Android project.
+
+---
+
+# 33. FINAL EXECUTION DIRECTIVE
+
+Build Kanak as a complete, production-oriented, native Android van sales application for wholesale FMCG operations in Bahrain.
+
+The application must be:
+
+**Simple enough for a beginner.**
+
+**Fast enough for daily repetitive sales.**
+
+**Reliable enough to preserve stock and financial records.**
+
+**Secure enough to enforce user permissions.**
+
+**Visually refined enough to feel like a premium mobile application.**
+
+**Small enough to remain maintainable without unnecessary infrastructure.**
+
+The essential operational sequence is:
+
+**Google Sign-In → Dashboard → Products / Customers → Invoice Creation → VAT Calculation → Atomic Save and Stock Deduction → Bluetooth Receipt Printing → Daily Sales Review.**
+
+For product photography, prioritize:
+
+**Barcode + Product Name → UTF-8 URL Encoding → Bing Thumbnail URL → Image Preview → Optional Manual URL or Upload → Save photo_url to Google Sheets.**
+
+Maintain the image-source priority:
+
+**Uploaded Image → Pasted URL → Automatic Bing Thumbnail → Placeholder.**
+
+Keep Google Sheets authoritative.
+
+Keep the interface minimal.
+
+Keep financial and inventory operations correct.
+
+Implement every required screen and integration.
+
+Verify actual behavior.
+
+Document every external dependency.
+
+**Do not stop at scaffolding, mockups, or planning. Execute the full implementation and deliver the working application with evidence of what has been verified.**

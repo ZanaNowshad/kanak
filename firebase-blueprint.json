@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Authenticated Kanak user profile and role definition",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID"
+        },
+        "email": {
+          "type": "string",
+          "description": "Google email address"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "standard"],
+          "description": "System authorization role"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Account active flag"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update"
+        }
+      },
+      "required": ["userId", "email", "role", "active"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Cloud backup of posted van sales invoice",
+      "type": "object",
+      "properties": {
+        "invoiceId": {
+          "type": "string",
+          "description": "Unique UUID of the invoice"
+        },
+        "invoiceNumber": {
+          "type": "string",
+          "description": "Sequential invoice number (e.g. INV-2026-0001)"
+        },
+        "customerId": {
+          "type": "string",
+          "description": "Customer identifier"
+        },
+        "customerName": {
+          "type": "string",
+          "description": "Customer store or business name"
+        },
+        "date": {
+          "type": "string",
+          "description": "Invoice date and time in Asia/Bahrain"
+        },
+        "subtotal": {
+          "type": "string",
+          "description": "Net subtotal in BHD"
+        },
+        "vatTotal": {
+          "type": "string",
+          "description": "Total 10% VAT in BHD"
+        },
+        "total": {
+          "type": "string",
+          "description": "Grand total in BHD"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["POSTED", "VOID"],
+          "description": "Invoice lifecycle status"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Identifier of the creator/sales driver"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user who recorded the invoice"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp"
+        }
+      },
+      "required": ["invoiceId", "invoiceNumber", "customerId", "customerName", "date", "subtotal", "vatTotal", "total", "status", "userId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "#/entities/User",
+      "description": "User profile and permissions document"
+    },
+    "/invoices/{invoiceId}": {
+      "schema": "#/entities/Invoice",
+      "description": "Cloud-synced van sales invoices"
+    }
+  }
+}
