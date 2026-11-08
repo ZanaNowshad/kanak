@@ -1,5 +1,7 @@
 package com.example.kanak.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,11 +13,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -340,7 +343,7 @@ fun TopSellingProductRow(
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = KanakSurfaceVariant,
-                border = androidx.compose.foundation.BorderStroke(1.dp, KanakDivider),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Black.copy(alpha = 0.10f)),
                 modifier = Modifier.size(46.dp)
             ) {
                 if (!photoUrl.isNullOrBlank()) {
@@ -426,7 +429,7 @@ fun ProductListItem(
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = KanakSurfaceVariant,
-                border = androidx.compose.foundation.BorderStroke(1.dp, KanakDivider),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Black.copy(alpha = 0.10f)),
                 modifier = Modifier.size(54.dp)
             ) {
                 if (!product.photoUrl.isNullOrBlank()) {
@@ -555,7 +558,8 @@ fun ProductListItem(
 fun CustomerListItem(
     customer: Customer,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    outstandingCredit: BigDecimal = BigDecimal.ZERO
 ) {
     Card(
         modifier = modifier
@@ -577,14 +581,14 @@ fun CustomerListItem(
             // Blue Storefront Icon
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = KanakAccentLight,
+                color = if (outstandingCredit > BigDecimal.ZERO) KanakWarningBackground else KanakAccentLight,
                 modifier = Modifier.size(44.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Outlined.Storefront,
                         contentDescription = null,
-                        tint = KanakPrimaryBlue,
+                        tint = if (outstandingCredit > BigDecimal.ZERO) KanakWarning else KanakPrimaryBlue,
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -593,15 +597,18 @@ fun CustomerListItem(
             Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = customer.businessName,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = KanakPrimaryText
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = customer.businessName,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = KanakPrimaryText
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
                 if (customer.contact.isNotBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
@@ -622,7 +629,38 @@ fun CustomerListItem(
                         maxLines = 1
                     )
                 }
+
+                if (outstandingCredit > BigDecimal.ZERO) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = KanakWarningBackground
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.CreditCard,
+                                contentDescription = null,
+                                tint = KanakWarning,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Credit Due: ${BahrainFinancials.formatBhd(outstandingCredit)}",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = KanakWarning,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
+                    }
+                }
             }
+
+            Spacer(modifier = Modifier.width(8.dp))
 
             Icon(
                 imageVector = Icons.Default.ChevronRight,
@@ -683,6 +721,41 @@ fun InvoiceListItem(
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
+
+                    if (!invoice.isVoid) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        if (invoice.isCredit) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (invoice.isPaid) KanakSuccessBackground else KanakWarningBackground
+                            ) {
+                                Text(
+                                    text = if (invoice.isPaid) "CREDIT (PAID)" else "UNPAID CREDIT",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (invoice.isPaid) KanakSuccess else KanakWarning,
+                                        fontSize = 10.sp
+                                    ),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        } else {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = KanakAccentLight
+                            ) {
+                                Text(
+                                    text = "CASH",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = KanakPrimaryBlue,
+                                        fontSize = 10.sp
+                                    ),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -694,13 +767,42 @@ fun InvoiceListItem(
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = invoice.date.take(16).replace("T", " "),
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        color = KanakSecondaryText,
-                        fontSize = 11.sp
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = invoice.date.take(16).replace("T", " "),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = KanakSecondaryText,
+                            fontSize = 11.sp
+                        )
                     )
-                )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = when {
+                            invoice.isSyncConflict -> KanakErrorBackground
+                            invoice.isSynced -> KanakSuccessBackground
+                            else -> KanakAccentLight
+                        }
+                    ) {
+                        Text(
+                            text = when {
+                                invoice.isSyncConflict -> "CONFLICT"
+                                invoice.isSynced -> "CONFIRMED"
+                                else -> "LOCAL ONLY"
+                            },
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = when {
+                                    invoice.isSyncConflict -> KanakError
+                                    invoice.isSynced -> KanakSuccess
+                                    else -> KanakPrimaryBlue
+                                },
+                                fontSize = 9.sp
+                            ),
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                }
             }
 
             Column(horizontalAlignment = Alignment.End) {
@@ -711,13 +813,24 @@ fun InvoiceListItem(
                         color = KanakPrimaryText
                     )
                 )
-                Text(
-                    text = "${invoice.lines.size} items",
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        color = KanakSecondaryText,
-                        fontSize = 11.sp
+                if (invoice.isCredit && !invoice.isPaid && !invoice.isVoid) {
+                    Text(
+                        text = "Due: ${BahrainFinancials.formatBhd(invoice.balanceDue)}",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = KanakWarning,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 11.sp
+                        )
                     )
-                )
+                } else {
+                    Text(
+                        text = "${invoice.lines.size} items",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = KanakSecondaryText,
+                            fontSize = 11.sp
+                        )
+                    )
+                }
             }
         }
     }
@@ -795,10 +908,39 @@ fun KanakConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val isReducedMotion = LocalReducedMotion.current
+    var hasAppeared by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        hasAppeared = true
+    }
+
+    val animatedScale by animateFloatAsState(
+        targetValue = if (isReducedMotion || hasAppeared) 1.0f else 0.95f,
+        animationSpec = tween(
+            durationMillis = if (isReducedMotion) 0 else MotionDuration.Modal,
+            easing = MotionCurves.EaseOut
+        ),
+        label = "modal_scale"
+    )
+
+    val animatedAlpha by animateFloatAsState(
+        targetValue = if (isReducedMotion || hasAppeared) 1.0f else 0.0f,
+        animationSpec = tween(
+            durationMillis = if (isReducedMotion) 0 else MotionDuration.Modal,
+            easing = MotionCurves.EaseOut
+        ),
+        label = "modal_alpha"
+    )
+
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(20.dp),
         containerColor = KanakSurface,
+        modifier = Modifier.graphicsLayer {
+            scaleX = animatedScale
+            scaleY = animatedScale
+            alpha = animatedAlpha
+        },
         icon = {
             Surface(
                 shape = CircleShape,

@@ -1,0 +1,953 @@
+# KANAK — MULTI-TENANT, MULTI-VAN & EMPLOYEE ACCESS MANAGEMENT
+## Complete Production Feature Specification
+
+**Feature:** Business Accounts, Fleet Management, Employee Access, Permissions and Centralized Data Synchronization  
+**Target release:** KANAK 1.0.0  
+**Platform:** Native Android with centralized PostgreSQL backend  
+**Primary market:** Bahrain  
+**Currency:** BHD, exactly three decimal places  
+**Architecture:** One authoritative operational database serving multiple isolated companies  
+**Authentication:** Google Sign-In with backend-verified user identity
+
+---
+
+# 1. CORE CONCEPT
+
+KANAK must support an unlimited number of independently registered businesses, subject to infrastructure capacity and configured commercial limits.
+
+Each business operates within a completely isolated environment.
+
+A business may have:
+
+- One primary owner.
+- Multiple authorized managers.
+- Multiple salespeople.
+- Multiple vans.
+- Multiple Android devices.
+- One or more warehouses.
+- Shared products, customers and suppliers.
+- Separately tracked stock for each van and warehouse.
+- One centralized business-wide transaction history.
+- One company activation/license.
+
+**A company's employees must never need to register or activate a separate company to access their employer's business.**
+
+They join the existing business through an invitation.
+
+Every authorized user operates within the same company database scope.
+
+However, permissions determine which records they may view or modify.
+
+---
+
+# 2. MULTI-TENANT ARCHITECTURE
+
+## 2.1 Definition of a tenant
+
+A tenant is a registered business with a unique `business_id`.
+
+Example:
+
+| Business | Tenant ID | Owner |
+|---|---|---|
+| ABC FMCG Distribution | `biz_001` | Owner A |
+| Gulf Wholesale Trading | `biz_002` | Owner B |
+| Bahrain Van Supplies | `biz_003` | Owner C |
+
+These IDs are illustrative, not hardcoded production records.
+
+Every business must have its own logically isolated records.
+
+The system may use one PostgreSQL database for all businesses, provided business-level isolation is rigorously enforced.
+
+## 2.2 Tenant isolation
+
+Every tenant-owned database record must belong to exactly one business.
+
+For example:
+
+```text
+products
+--------
+product_id
+business_id
+name
+barcode
+selling_price
+vat_rate
+
+invoices
+--------
+invoice_id
+business_id
+van_id
+salesperson_id
+customer_id
+total
+status
+```
+
+Every query must enforce business ownership.
+
+A user belonging to Business A must never be able to read or modify records belonging to Business B simply by changing an API URL, record ID or request payload.
+
+Enforce these restrictions on the backend and at the database authorization layer where appropriate.
+
+Never depend only on Android UI visibility to enforce permissions.
+
+## 2.3 Business data scope
+
+The following data belongs to each individual company:
+
+- Products and product catalogues.
+- Customers.
+- Suppliers.
+- Warehouses.
+- Vans.
+- Inventory.
+- Pricing rules.
+- Purchases.
+- Invoices.
+- Payments.
+- Returns.
+- Stock movements.
+- Users and memberships.
+- Business settings.
+- Audit records.
+
+A barcode such as `6291000000012` may exist in multiple businesses with different prices and stock.
+
+The uniqueness of a barcode, where enforced, should be scoped to the relevant business rather than globally across all KANAK tenants.
+
+---
+
+# 3. BUSINESS REGISTRATION AND OWNERSHIP
+
+## 3.1 Owner registration workflow
+
+On first launch, the user signs in with Google.
+
+If the verified user has no existing business membership, KANAK displays:
+
+**Welcome to KANAK**
+
+Choose:
+
+1. Register a New Business.
+2. Join an Existing Business.
+
+When registering a new business, collect the required company identity, owner, contact and tax information.
+
+After submission:
+
+- Generate a unique business ID.
+- Create the business in the authoritative database.
+- Set the registering user as its owner.
+- Set its status to `PENDING_ACTIVATION`.
+- Store the registration request.
+- Notify the KANAK platform administrator through a configured notification mechanism.
+
+## 3.2 Company activation
+
+The owner must obtain an activation code issued by the KANAK platform administrator following manual payment verification.
+
+After successful redemption:
+
+`PENDING_ACTIVATION → ACTIVE`
+
+Activation belongs to the company, not to a device or individual employee.
+
+The company can then have any number of authorized users and vans permitted by its license.
+
+**One business activation must work across all authorized employee devices.**
+
+## 3.3 Business ownership rights
+
+The primary owner has full company-level administration, subject to platform-level restrictions.
+
+The owner may:
+
+- Create and manage vans.
+- Create and manage warehouses.
+- Invite employees.
+- Assign or reassign employees to vans.
+- Grant and revoke permissions.
+- Manage company products, customers and suppliers.
+- Set product selling prices.
+- Transfer inventory.
+- Review all invoices and payments.
+- Review sales across every van.
+- Access company-wide reports.
+- Manage company settings.
+- Review employee activity.
+- Remove employee access.
+- Manage company data exports.
+
+Only trusted, authenticated platform operators may issue or administer activation codes.
+
+A business owner does not automatically become a KANAK platform administrator.
+
+---
+
+# 4. MULTI-VAN MANAGEMENT
+
+## 4.1 Van creation
+
+The owner opens:
+
+**Fleet → Manage Vans → Add Van**
+
+Fields:
+
+- Van display name.
+- Van number or code.
+- Vehicle registration number, optional.
+- Assigned salesperson.
+- Optional backup salesperson.
+- Initial status.
+- Notes.
+
+Example:
+
+| Van | Assigned employee | Status |
+|---|---|---|
+| VAN-001 | Salesperson A | Active |
+| VAN-002 | Salesperson B | Active |
+| VAN-003 | Unassigned | Available |
+
+Van IDs must be generated by the backend and remain stable.
+
+Van display names or codes should be unique within their business.
+
+## 4.2 Van inventory
+
+Each van has its own inventory location and stock balances.
+
+All van balances are maintained in the same authoritative business database.
+
+Example:
+
+| Product | Warehouse | Van 001 | Van 002 |
+|---|---:|---:|---:|
+| Milk 1 L | 300 | 50 | 70 |
+| Water 500 mL | 600 | 100 | 80 |
+| Biscuits | 250 | 40 | 30 |
+
+A sale made by Van 001 deducts from Van 001's allocated stock.
+
+It must not deduct Van 002's inventory.
+
+## 4.3 Warehouse-to-van transfer
+
+The owner or authorized manager selects:
+
+**Inventory → Transfer Stock**
+
+Workflow:
+
+1. Select source warehouse.
+2. Select destination van.
+3. Select products.
+4. Enter quantities.
+5. Review available source stock.
+6. Confirm transfer.
+7. Commit an atomic stock movement transaction.
+8. Update both location balances.
+9. Record the movement and responsible user.
+
+A failed transfer must not partially deduct inventory.
+
+## 4.4 Van-to-van transfer
+
+Where allowed, stock can move between vans.
+
+Example:
+
+`Van 001 → 10 units → Van 002`
+
+The backend must atomically subtract ten units from the source van and add ten units to the destination van.
+
+The record must include source, destination, product, quantity, responsible employee and timestamps.
+
+## 4.5 Van assignment
+
+A salesperson may be assigned to one or multiple vans, depending on the business's permission configuration.
+
+When an employee is assigned to a van, that employee may access its authorized sales and stock data.
+
+If a salesperson is moved from Van 001 to Van 003:
+
+- Their active assignment changes.
+- Their permissions are recalculated.
+- New operations use Van 003's inventory.
+- Historical invoices retain their original van assignment.
+- The previous assignment must no longer authorize future transactions.
+
+Never rewrite historical invoices when an employee changes vans.
+
+---
+
+# 5. MULTIPLE SALESPEOPLE AND LOGIN ACCESS
+
+## 5.1 Independent employee identity
+
+Every salesperson must use an individual Google account.
+
+Do not create shared usernames such as `salesman`, `van1` or `staff`.
+
+Each employee has:
+
+- Unique user ID.
+- Verified email.
+- Display name.
+- Business membership.
+- Role.
+- Assigned van or vans.
+- Permission grants.
+- Membership status.
+- Activity history.
+
+All transactions must record the authenticated employee responsible.
+
+## 5.2 Employee invitation workflow
+
+The owner opens:
+
+**Settings → Team Members → Invite Employee**
+
+The invitation form contains:
+
+- Employee email address.
+- Employee role.
+- Assigned van.
+- Optional additional van permissions.
+- Optional delegated permissions.
+
+Example:
+
+```text
+INVITE EMPLOYEE
+
+Email:
+salesperson@example.com
+
+Role:
+Salesperson
+
+Assigned Van:
+VAN-002
+
+Permissions:
+[x] Create invoices
+[x] Add customers
+[x] View assigned stock
+[x] Print receipts
+[ ] Add suppliers
+[ ] Create purchases
+[ ] Adjust inventory
+[ ] Invite employees
+[ ] Change product prices
+
+[Send Invitation]
+```
+
+The backend creates an invitation linked to the exact company and email.
+
+The invitation should expire and have a secure single-use acceptance mechanism.
+
+## 5.3 Invitation notification
+
+The invited employee receives a genuine email or an explicitly sent message from the owner.
+
+The notification should include:
+
+- Inviting business name.
+- Assigned role.
+- Instructions to obtain the official KANAK APK.
+- Instructions to sign in with the invited Google account.
+- A secure invitation link or acceptance code.
+- Invitation expiration information.
+
+Do not claim that an email was delivered unless the actual delivery integration confirms it.
+
+## 5.4 Employee onboarding
+
+The employee:
+
+1. Installs KANAK.
+2. Opens the application.
+3. Signs in with Google.
+4. Uses the invited account.
+5. Selects the invitation or enters the acceptance code.
+6. Accepts the company invitation.
+7. Receives the assigned role and permitted van access.
+8. Enters the operational dashboard.
+
+The employee is joining an existing business, not registering a new company.
+
+No separate company activation code is required.
+
+## 5.5 Membership across devices
+
+A salesperson can sign in from another approved Android device if company policy permits it.
+
+Authorization comes from verified backend membership, not from a device-specific local preference.
+
+Device registration and revocation should be supported.
+
+If the business restricts simultaneous sessions, enforce that restriction server-side rather than through local UI logic.
+
+---
+
+# 6. COMPLETE ROLE AND PERMISSION SYSTEM
+
+The system must support role-based access control with optional fine-grained permission overrides.
+
+## 6.1 Default roles
+
+### Platform Administrator
+
+Operates the overall KANAK platform.
+
+May administer company registration requests, activation codes and platform security.
+
+Does not automatically gain unrestricted access to private customer business records without an explicit support-access policy and auditable authorization.
+
+### Business Owner
+
+Full administrative access to their own business.
+
+Cannot access another business unless separately authorized there.
+
+### Manager
+
+Operational administrator with explicitly delegated permissions.
+
+Can manage inventory, products or sales depending on business policy.
+
+### Salesperson
+
+Limited operational user primarily responsible for van sales.
+
+Can create customers, sell products, issue invoices and print receipts within their assigned scope.
+
+Cannot perform restricted administrative actions unless the owner explicitly grants them.
+
+---
+
+# 7. DETAILED PERMISSION MATRIX
+
+| Feature / Operation | Owner | Manager | Salesperson |
+|---|---|---|---|
+| View company dashboard | Full | Delegated | Assigned scope |
+| View products | Yes | Yes | Yes |
+| Search/barcode scan | Yes | Yes | Yes |
+| Add products | Yes | Delegated | No |
+| Edit product details | Yes | Delegated | No |
+| Change selling prices | Yes | Delegated | No |
+| View assigned stock | Yes | Yes | Yes |
+| View all van stock | Yes | Delegated | No |
+| Add customers | Yes | Yes | Yes |
+| Edit customers | Yes | Yes | Yes |
+| View customer invoices | Yes | Delegated | Assigned scope |
+| Create invoices | Yes | Yes | Yes |
+| Accept recorded payments | Yes | Yes | Yes |
+| Print/reprint receipts | Yes | Yes | Yes |
+| Void invoices | Yes | Delegated | No |
+| Process returns | Yes | Delegated | No by default |
+| Add suppliers | Yes | Delegated | No |
+| Edit suppliers | Yes | Delegated | No |
+| Create purchases | Yes | Delegated | No |
+| Transfer stock | Yes | Delegated | No |
+| Adjust stock | Yes | Delegated | No |
+| Create vans | Yes | Delegated | No |
+| Assign salespeople | Yes | Delegated | No |
+| Invite employees | Yes | Explicit grant | No |
+| Revoke employees | Yes | Explicit grant | No |
+| Modify user permissions | Yes | Explicit grant within limits | No |
+| Company settings | Yes | Limited | No |
+| Activation/licensing | Owner-facing view | No | No |
+| All-company reports | Yes | Delegated | No |
+| Assigned van reports | Yes | Yes | Yes |
+| View audit history | Yes | Delegated | Limited |
+
+Each permission must be enforced by the backend.
+
+Avoid treating the role name alone as sufficient for every action. The backend should evaluate the effective grants, the requested business, the assigned van and the target resource.
+
+## 7.1 Permission identifiers
+
+Use stable permission identifiers such as:
+
+```text
+products.read
+products.create
+products.update
+products.delete
+products.change_price
+
+customers.read
+customers.create
+customers.update
+
+suppliers.read
+suppliers.create
+suppliers.update
+
+sales.create
+sales.read_own_van
+sales.read_all
+sales.void
+sales.return
+
+payments.record
+payments.refund
+
+inventory.read_assigned
+inventory.read_all
+inventory.receive
+inventory.transfer
+inventory.adjust
+
+purchases.create
+purchases.reverse
+
+vans.read
+vans.create
+vans.update
+vans.assign
+
+team.invite
+team.revoke
+team.assign
+team.manage_permissions
+
+reports.read_assigned
+reports.read_all
+
+settings.read
+settings.update
+
+licenses.read
+```
+
+Do not permit a manager to grant permissions the manager does not possess, unless a specifically controlled delegation policy permits it.
+
+---
+
+# 8. DIFFERENT DASHBOARDS FOR DIFFERENT ROLES
+
+## 8.1 Owner dashboard
+
+The owner sees a complete company overview:
+
+```text
+ABC FMCG DISTRIBUTION
+
+Today's Revenue       BHD 850.750
+Invoices Today        64
+Active Vans           5
+Active Salespeople    7
+
+Fleet Performance
+
+Van 001    BHD 220.500
+Van 002    BHD 175.250
+Van 003    BHD 160.000
+Van 004    BHD 145.000
+Van 005    BHD 150.000
+
+[Products] [Customers] [Inventory]
+[Vans] [Purchases] [Suppliers]
+[Team] [Reports] [Settings]
+```
+
+These figures are illustrative layout examples, not actual sales data.
+
+The owner may select an individual van to inspect its sales and inventory.
+
+## 8.2 Salesperson dashboard
+
+A salesperson sees their permitted operational environment:
+
+```text
+ABC FMCG DISTRIBUTION
+Salesperson: Employee A
+Assigned Van: VAN-002
+
+Today's Sales
+BHD 175.250
+
+Invoices Today
+14
+
+Products Available
+128
+
+Pending Sync
+0
+
+[New Sale]
+[Customers]
+[Products]
+[Van Inventory]
+[My Invoices]
+[Print Receipts]
+```
+
+The employee must not see business-administration controls unless explicitly authorized.
+
+## 8.3 Manager dashboard
+
+The manager sees the operational scope granted by the owner.
+
+A fleet manager might see several vans, warehouse transfers and performance reports without receiving company licensing privileges.
+
+---
+
+# 9. SHARED PRODUCTS AND CUSTOMERS
+
+Products and customers belong to the business rather than individual vans.
+
+If the owner adds a product, that product becomes available to authorized employees after synchronization.
+
+Each van retains separate stock quantities.
+
+Example:
+
+Product: Milk 1 L
+
+```text
+Business Product ID: P-0001
+Selling price: BHD 0.750
+VAT: Configured rate
+
+Warehouse stock: 300
+Van 001 stock: 50
+Van 002 stock: 70
+Van 003 stock: 40
+```
+
+All salespeople view the same product definition and authorized price.
+
+They cannot arbitrarily modify the centrally configured selling price.
+
+A salesperson creating a new customer makes the customer available within the business according to company visibility rules.
+
+Customer IDs must be centrally generated or safely unique.
+
+---
+
+# 10. SIMULTANEOUS MULTI-VAN SALES
+
+This is one of the most important acceptance requirements.
+
+Consider two salespeople operating concurrently.
+
+### Scenario A — Different vans
+
+Van 001 has 20 units of Product A.
+
+Van 002 has 15 units of Product A.
+
+Salesperson A sells five units from Van 001.
+
+Salesperson B sells seven units from Van 002.
+
+Expected result:
+
+```text
+Van 001: 20 - 5 = 15
+Van 002: 15 - 7 = 8
+```
+
+Both sales commit independently with unique invoice IDs and invoice numbers.
+
+Neither sale corrupts the other's stock.
+
+### Scenario B — Same van
+
+Two authorized employees attempt to sell the last available unit of a product from the same van at approximately the same time.
+
+The backend must serialize or otherwise safely resolve the competing stock mutations.
+
+Only one transaction may commit against that single available unit.
+
+The other must receive a clear insufficient-stock or conflict outcome.
+
+### Scenario C — Network interruption
+
+A salesperson begins a sale offline.
+
+The app stores the provisional operation in its durable local outbox.
+
+When connectivity returns, the operation is submitted with its original idempotency key.
+
+If already committed, the server returns the existing transaction outcome.
+
+If there is a stock or authorization conflict, the app must display it for resolution.
+
+The app must never silently create a duplicate invoice.
+
+---
+
+# 11. REAL-TIME DATA SYNCHRONIZATION
+
+All authorized devices communicate with the centralized backend.
+
+When a sale commits:
+
+1. The authoritative invoice is created.
+2. The correct van inventory is deducted.
+3. The financial records are updated.
+4. The company sales reports reflect the transaction.
+5. Other authorized devices refresh affected records.
+
+The owner should be able to monitor fleet performance without manually collecting each salesperson's device data.
+
+Changes must propagate reliably, while clearly distinguishing cached or delayed information from confirmed server state.
+
+No device may bypass the backend by writing directly to an independent business spreadsheet.
+
+---
+
+# 12. OWNER TEAM MANAGEMENT SCREEN
+
+Create a complete team-management module.
+
+## Employees list
+
+Display:
+
+- Employee name.
+- Verified email.
+- Role.
+- Assigned van.
+- Membership status.
+- Last relevant activity, where supported.
+- Permission summary.
+
+Example:
+
+```text
+TEAM MEMBERS
+
+Employee A
+sales1@example.com
+Salesperson · VAN-001 · Active
+
+[View] [Change Van] [Permissions] [Remove]
+
+Employee B
+sales2@example.com
+Salesperson · VAN-002 · Active
+
+[View] [Change Van] [Permissions] [Remove]
+```
+
+## Employee details
+
+Allow authorized owners to:
+
+- View employee details.
+- View assigned vans.
+- Change role.
+- Grant/revoke supported permissions.
+- Suspend access.
+- Reactivate access.
+- Reassign vans.
+- Review relevant audit activity.
+- Revoke device sessions where supported.
+
+Every administrative change must be audited.
+
+## Pending invitations
+
+Show:
+
+- Recipient email.
+- Intended role.
+- Intended van.
+- Invitation status.
+- Expiry.
+- Resend action.
+- Revoke action.
+
+Resending an invitation must not create uncontrolled duplicate memberships.
+
+---
+
+# 13. MULTIPLE DEVICES AND SESSION SECURITY
+
+Each device should be registered or identifiable through a non-secret device installation ID.
+
+Track:
+
+- Device installation ID.
+- Authenticated employee.
+- Business membership.
+- Assigned van.
+- Device status.
+- Last successful synchronization.
+- App version.
+
+Device identity must not substitute for user authentication.
+
+When an owner revokes an employee:
+
+- Future backend requests are denied.
+- New synchronization attempts are blocked.
+- Pending operations are not silently committed.
+- Cached sensitive data is protected according to the configured revocation policy.
+- Re-login must not restore revoked access.
+
+When a device is lost, an owner should be able to revoke that device's access without deleting legitimate historical transactions.
+
+---
+
+# 14. BUSINESS SWITCHING
+
+A user may legitimately belong to multiple companies.
+
+Example: an accountant or manager works for two businesses.
+
+KANAK must allow the employee to select an authorized business.
+
+Business switching requirements:
+
+- Verify membership in the selected business.
+- Update the active business context.
+- Clear or securely isolate the previous business's local read models.
+- Separate offline queues by business and employee identity.
+- Prevent cross-company data leakage.
+- Never reuse one business's invoice IDs, stock or customer context in another business.
+
+Switching businesses is not equivalent to changing only a screen title.
+
+All subsequent API calls must be authorized for the newly selected business.
+
+---
+
+# 15. PERMISSION REVOCATION AND AUDIT LOGGING
+
+Record meaningful administrative actions, including:
+
+- Employee invited.
+- Invitation accepted.
+- Role changed.
+- Van assigned.
+- Permission granted or revoked.
+- Membership suspended or removed.
+- Company configuration changed.
+- Product price changed.
+- Stock transfer approved.
+- Invoice voided.
+
+Each audit record must contain the responsible verified identity, business, action, target record and timestamp.
+
+A revoked employee's historical invoices and audit history must remain intact.
+
+Do not delete business transactions merely because the employee account is removed.
+
+---
+
+# 16. DATABASE STRUCTURE
+
+Implement at least the following logical entities:
+
+```text
+businesses
+users
+business_memberships
+roles
+permissions
+member_permission_grants
+
+invitations
+
+vans
+van_assignments
+devices
+warehouses
+inventory_locations
+
+products
+product_prices
+product_barcodes
+
+customers
+suppliers
+
+inventory_balances
+inventory_movements
+stock_transfers
+
+invoices
+invoice_lines
+payments
+refunds
+
+audit_events
+sync_operations
+
+business_licenses
+activation_codes
+```
+
+Maintain strong referential integrity and tenant-scoped uniqueness constraints.
+
+Operational transactions must use PostgreSQL atomic commits.
+
+Use carefully scoped database access and consider PostgreSQL row-level security as an additional tenant-isolation layer.
+
+---
+
+# 17. COMPLETE ACCEPTANCE TESTS
+
+The multi-tenant and multi-van feature is complete only when all these scenarios pass:
+
+1. Business A registers and activates successfully.
+2. Business B registers independently.
+3. Business A cannot read, update or delete Business B records.
+4. Business A creates three vans.
+5. Owner invites three salespeople.
+6. Invitations can only be accepted by their intended verified accounts.
+7. Salespeople join without entering separate company activation codes.
+8. Each salesperson sees only assigned van inventory.
+9. Authorized salespeople can create invoices.
+10. Unauthorized supplier creation is denied at the API layer.
+11. Unauthorized staff invitations are denied.
+12. Owner can reassign an employee between vans.
+13. The employee's effective permissions update correctly.
+14. Owner can revoke an employee.
+15. Revoked employee backend requests fail.
+16. Two vans can sell simultaneously.
+17. A same-van last-unit stock conflict cannot oversell.
+18. Repeated checkout requests do not create duplicate invoices.
+19. Offline queued operations survive application restart.
+20. Reconnected devices reconcile their queued operations correctly.
+21. Company-wide sales totals reconcile to committed invoices.
+22. Inventory totals reconcile to the movement ledger.
+23. Business switching never exposes another company's cached records.
+24. Employees cannot escalate their own roles or permissions.
+25. Real Android devices complete sign-in, invitation, van assignment and sales workflows successfully.
+
+These must be tested against the actual deployed authorization and transactional backend, not only using local mocks.
+
+---
+
+# 18. FINAL REQUIRED BEHAVIOR
+
+When KANAK's multi-tenant feature is complete, the experience must be:
+
+**For a business owner:** Register once, activate once, create multiple vans, invite employees, assign permissions, distribute stock and monitor the entire company from one account.
+
+**For a salesperson:** Install the same APK, sign in with their own Google account, accept the company's invitation and immediately access their authorized van-sales workspace without registering another company.
+
+**For the backend:** Maintain one authoritative, tenant-isolated business datastore, enforce every role and permission, process concurrent transactions safely and ensure all devices reconcile to the same business records.
+
+**For security:** A salesperson must never gain administrative privileges or another company's data simply by altering the Android application, API requests or locally cached settings.
+
+**For production:** All workflows must use real persisted data, pass integration and concurrency tests, and operate successfully on multiple real Android devices.
+
+**Implementation directive:** Build this entire subsystem into KANAK end to end. Do not deliver only invitation screens, Firestore membership documents, sample dashboards or an isolated backend prototype. Connect registration, licensing, login, authorization, vans, inventory, checkout, synchronization and staff administration into one fully operational application with verifiable acceptance evidence.

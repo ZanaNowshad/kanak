@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -25,6 +26,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.kanak.ui.components.KanakBrandLoadingDialog
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -33,6 +35,7 @@ fun ActivationGateScreen(
     licenseManager: LicenseManager,
     onActivationSuccess: () -> Unit,
     onReEditRegistration: () -> Unit,
+    onNavigateToJoinBusiness: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -408,7 +411,25 @@ fun ActivationGateScreen(
                 Text("Need to modify company details?", color = KanakSecondaryText, fontSize = 12.sp)
             }
 
+            if (onNavigateToJoinBusiness != null) {
+                TextButton(onClick = onNavigateToJoinBusiness) {
+                    Text("Employee with an invite code? Tap to join company fleet", color = KanakPrimaryBlue, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+
             Spacer(modifier = Modifier.height(20.dp))
+        }
+
+        if (isChecking) {
+            KanakBrandLoadingDialog(
+                message = "Verifying Activation Key...",
+                subMessage = "Cryptographic Key Authorization"
+            )
+        } else if (isVerifyingOnline) {
+            KanakBrandLoadingDialog(
+                message = "Checking Online Cloud Status...",
+                subMessage = "Querying NBR Authoritative Licensing Registry"
+            )
         }
     }
 }

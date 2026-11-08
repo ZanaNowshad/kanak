@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  kanak-db:
+    image: postgres:16-alpine
+    container_name: kanak-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: kanak_user
+      POSTGRES_PASSWORD: kanak_pass_secure_2026
+      POSTGRES_DB: kanak_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - kanak_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kanak_user -d kanak_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kanak-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kanak-api
+    restart: always
+    depends_on:
+      kanak-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://kanak_user:kanak_pass_secure_2026@kanak-db:5432/kanak_db
+      MASTER_ADMIN_EMAIL: zanabalmuhamed@gmail.com
+      BAHRAIN_VAT_RATE: "0.100"
+    ports:
+      - "8000:8000"
+
+volumes:
+  kanak_pgdata:

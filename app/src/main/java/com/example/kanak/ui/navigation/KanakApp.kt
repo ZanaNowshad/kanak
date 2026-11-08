@@ -1,6 +1,9 @@
 package com.example.kanak.ui.navigation
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.*
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -9,11 +12,13 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import com.example.kanak.auth.AuthState
 import com.example.kanak.auth.GoogleAuthManager
 import com.example.kanak.data.repository.KanakRepository
@@ -21,36 +26,50 @@ import com.example.kanak.domain.models.User
 import com.example.kanak.licensing.*
 import com.example.kanak.printing.BluetoothPrinterManager
 import com.example.kanak.ui.auth.AuthScreen
+import com.example.kanak.ui.auth.JoinBusinessScreen
 import com.example.kanak.ui.customers.CustomersScreen
 import com.example.kanak.ui.dashboard.DashboardScreen
+import com.example.kanak.ui.fleet.FleetManagementScreen
 import com.example.kanak.ui.invoices.InvoiceComposerScreen
 import com.example.kanak.ui.invoices.InvoiceDetailScreen
 import com.example.kanak.ui.invoices.InvoicesHistoryScreen
+import com.example.kanak.ui.more.MoreHubScreen
 import com.example.kanak.ui.products.AddEditProductScreen
 import com.example.kanak.ui.products.ProductsScreen
 import com.example.kanak.ui.purchases.PurchasesScreen
+import com.example.kanak.ui.sales.DailySalesSummaryScreen
+import com.example.kanak.ui.sales.ExpressSalesScreen
 import com.example.kanak.ui.settings.SettingsScreen
 import com.example.kanak.ui.stock.StockScreen
 import com.example.kanak.ui.suppliers.SuppliersScreen
+import com.example.kanak.ui.team.TeamManagementScreen
 import com.example.ui.theme.*
 
 enum class PrimaryTab(val label: String) {
     HOME("Home"),
-    PRODUCTS("Products"),
-    CUSTOMERS("Customers"),
+    SELL("Sell"),
     INVOICES("Invoices"),
-    STOCK("Stock")
+    PRODUCTS("Products"),
+    MORE("More")
 }
 
 sealed class Screen {
     object TabView : Screen()
     data class AddEditProduct(val productId: String?) : Screen()
     object InvoiceComposer : Screen()
+    object ExpressSales : Screen()
     data class InvoiceDetail(val invoiceId: String) : Screen()
     object Purchases : Screen()
     object Suppliers : Screen()
     object Settings : Screen()
     object AdminLicensePortal : Screen()
+    object DailySalesSummary : Screen()
+    object FleetManagement : Screen()
+    object TeamManagement : Screen()
+    object JoinBusiness : Screen()
+    object Customers : Screen()
+    object Stock : Screen()
+    object SystemDiagnostics : Screen()
 }
 
 @Composable
@@ -65,27 +84,107 @@ fun KanakApp(
     val licenseManager = remember { LicenseManager(context) }
     val licenseState by licenseManager.licenseState.collectAsState()
     var reEditingRegistration by remember { mutableStateOf(false) }
+    var showingJoinBusiness by remember { mutableStateOf(false) }
+    var showStartupSplash by remember { mutableStateOf(true) }
 
-    when (val state = authState) {
+    AnimatedContent(
+        targetState = showStartupSplash,
+        transitionSpec = {
+            fadeIn(animationSpec = tween(450)) togetherWith fadeOut(animationSpec = tween(450))
+        },
+        label = "StartupSplashTransition"
+    ) { isSplash ->
+        if (isSplash) {
+            com.example.kanak.ui.components.KanakStartupLoader(
+                onStartupComplete = { showStartupSplash = false },
+                modifier = modifier
+            )
+        } else {
+            when (val state = authState) {
         is AuthState.Authenticated -> {
-            val isMasterAdmin = remember(state.user) {
-                licenseManager.isMasterAdmin(state.user.email)
+            val teamMemberships by repository.teamMemberships.collectAsState()
+            val effectiveUser = remember(state.user, teamMemberships) {
+                repository.resolveUserWithMembership(state.user)
             }
 
-            LaunchedEffect(state.idToken) {
+            val isMasterAdmin = remember(effectiveUser) {
+                licenseManager.isMasterAdmin(effectiveUser.email)
+            }
+
+            val syncManager = remember { com.example.kanak.data.sync.GoogleSheetsSyncManager(context, repository) }
+            val bootstrapCloudManager = remember { com.example.kanak.data.sync.BootstrapCloudManager(context, repository, syncManager) }
+            val bootstrapStatus by bootstrapCloudManager.bootstrapStatus.collectAsState()
+            val coroutineScope = rememberCoroutineScope()
+            var isVerifyingRegistration by remember(state.user.email) {
+                mutableStateOf(!isMasterAdmin && licenseState != LicenseState.ACTIVATED)
+            }
+
+            LaunchedEffect(state.idToken, effectiveUser.email) {
                 repository.currentAuthToken = state.idToken
+                if (!isMasterAdmin && licenseState != LicenseState.ACTIVATED) {
+                    try {
+                        licenseManager.syncUserRegistration(effectiveUser.email, effectiveUser.businessName)
+                    } catch (_: Exception) {}
+                    isVerifyingRegistration = false
+                } else {
+                    isVerifyingRegistration = false
+                }
                 try {
-                    com.example.kanak.data.firebase.KanakFirebaseManager(context).syncUserToFirestore(state.user)
+                    com.example.kanak.data.firebase.KanakFirebaseManager(context).syncUserToFirestore(effectiveUser)
                 } catch (_: Exception) {
+                }
+                bootstrapCloudManager.checkCloudBootstrapStatus(state.idToken)
+            }
+
+            val currentCompanyName = remember(effectiveUser, licenseState) {
+                if (effectiveUser.businessName.isNotBlank() && !effectiveUser.businessName.contains("W.L.L.", ignoreCase = true)) {
+                    effectiveUser.businessName
+                } else {
+                    repository.getBusinessName()
                 }
             }
 
-            if (!isMasterAdmin && (licenseState == LicenseState.UNREGISTERED || reEditingRegistration)) {
+            com.example.kanak.ui.components.BootstrapCloudDialog(
+                status = bootstrapStatus,
+                companyName = currentCompanyName,
+                onGrantPermissionAndCreate = {
+                    coroutineScope.launch {
+                        bootstrapCloudManager.executeBootstrapCreation(state.idToken, currentCompanyName)
+                    }
+                },
+                onDismiss = {
+                    bootstrapCloudManager.dismissPrompt()
+                }
+            )
+
+            if (isVerifyingRegistration) {
+                com.example.kanak.ui.components.KanakBrandLoadingOverlay(
+                    message = "Verifying Enterprise Registration...",
+                    subMessage = "Authoritative Account Check for ${effectiveUser.email}"
+                )
+            } else if (showingJoinBusiness) {
+                JoinBusinessScreen(
+                    repository = repository,
+                    currentUser = effectiveUser,
+                    licenseManager = licenseManager,
+                    onJoinedSuccess = {
+                        showingJoinBusiness = false
+                        reEditingRegistration = false
+                    },
+                    onRegisterNewCompany = {
+                        showingJoinBusiness = false
+                    },
+                    modifier = modifier
+                )
+            } else if (!isMasterAdmin && (licenseState == LicenseState.UNREGISTERED || reEditingRegistration)) {
                 CompanyRegistrationScreen(
                     licenseManager = licenseManager,
-                    currentUser = state.user,
+                    currentUser = effectiveUser,
                     onRegistrationCompleted = {
                         reEditingRegistration = false
+                    },
+                    onNavigateToJoinBusiness = {
+                        showingJoinBusiness = true
                     },
                     modifier = modifier
                 )
@@ -98,6 +197,9 @@ fun KanakApp(
                     onReEditRegistration = {
                         reEditingRegistration = true
                     },
+                    onNavigateToJoinBusiness = {
+                        showingJoinBusiness = true
+                    },
                     modifier = modifier
                 )
             } else {
@@ -106,7 +208,7 @@ fun KanakApp(
                     authManager = authManager,
                     printerManager = printerManager,
                     licenseManager = licenseManager,
-                    currentUser = state.user,
+                    currentUser = effectiveUser,
                     modifier = modifier
                 )
             }
@@ -120,6 +222,8 @@ fun KanakApp(
         }
     }
 }
+}
+}
 
 @Composable
 private fun AuthenticatedApp(
@@ -130,6 +234,12 @@ private fun AuthenticatedApp(
     currentUser: User,
     modifier: Modifier = Modifier
 ) {
+    val isMasterAdmin = remember(currentUser) {
+        licenseManager.isMasterAdmin(currentUser.email)
+    }
+
+    val visibleTabs = PrimaryTab.values()
+
     var selectedTab by remember { mutableStateOf(PrimaryTab.HOME) }
     var currentScreen by remember { mutableStateOf<Screen>(Screen.TabView) }
 
@@ -143,7 +253,7 @@ private fun AuthenticatedApp(
                         tonalElevation = 6.dp,
                         modifier = Modifier.testTag("bottom_nav_bar")
                     ) {
-                        PrimaryTab.values().forEach { tab ->
+                        visibleTabs.forEach { tab ->
                             val isSelected = selectedTab == tab
                             NavigationBarItem(
                                 selected = isSelected,
@@ -152,10 +262,10 @@ private fun AuthenticatedApp(
                                     Icon(
                                         imageVector = when (tab) {
                                             PrimaryTab.HOME -> if (isSelected) Icons.Filled.Home else Icons.Outlined.Home
-                                            PrimaryTab.PRODUCTS -> if (isSelected) Icons.Filled.Inventory2 else Icons.Outlined.Inventory2
-                                            PrimaryTab.CUSTOMERS -> if (isSelected) Icons.Filled.People else Icons.Outlined.People
+                                            PrimaryTab.SELL -> if (isSelected) Icons.Filled.PointOfSale else Icons.Outlined.PointOfSale
                                             PrimaryTab.INVOICES -> if (isSelected) Icons.Filled.ReceiptLong else Icons.Outlined.ReceiptLong
-                                            PrimaryTab.STOCK -> if (isSelected) Icons.Filled.Warehouse else Icons.Outlined.Warehouse
+                                            PrimaryTab.PRODUCTS -> if (isSelected) Icons.Filled.Inventory2 else Icons.Outlined.Inventory2
+                                            PrimaryTab.MORE -> if (isSelected) Icons.Filled.MoreHoriz else Icons.Outlined.MoreHoriz
                                         },
                                         contentDescription = tab.label
                                     )
@@ -183,46 +293,83 @@ private fun AuthenticatedApp(
                 },
                 modifier = modifier.fillMaxSize()
             ) { innerPadding ->
-                when (selectedTab) {
-                    PrimaryTab.HOME -> {
-                        DashboardScreen(
-                            repository = repository,
-                            onNavigateToNewInvoice = { currentScreen = Screen.InvoiceComposer },
-                            onNavigateToSettings = { currentScreen = Screen.Settings },
-                            modifier = Modifier.padding(innerPadding)
-                        )
-                    }
-                    PrimaryTab.PRODUCTS -> {
-                        ProductsScreen(
-                            repository = repository,
-                            onNavigateToAddProduct = { currentScreen = Screen.AddEditProduct(null) },
-                            onNavigateToEditProduct = { prodId -> currentScreen = Screen.AddEditProduct(prodId) },
-                            modifier = Modifier.padding(innerPadding)
-                        )
-                    }
-                    PrimaryTab.CUSTOMERS -> {
-                        CustomersScreen(
-                            repository = repository,
-                            modifier = Modifier.padding(innerPadding)
-                        )
-                    }
-                    PrimaryTab.INVOICES -> {
-                        InvoicesHistoryScreen(
-                            repository = repository,
-                            onNavigateToNewInvoice = { currentScreen = Screen.InvoiceComposer },
-                            onNavigateToInvoiceDetail = { id -> currentScreen = Screen.InvoiceDetail(id) },
-                            modifier = Modifier.padding(innerPadding)
-                        )
-                    }
-                    PrimaryTab.STOCK -> {
-                        StockScreen(
-                            repository = repository,
-                            currentUserId = currentUser.userId,
-                            isAdmin = currentUser.isAdmin,
-                            onNavigateToPurchases = { currentScreen = Screen.Purchases },
-                            onNavigateToSuppliers = { currentScreen = Screen.Suppliers },
-                            modifier = Modifier.padding(innerPadding)
-                        )
+                val isReducedMotion = LocalReducedMotion.current
+                AnimatedContent(
+                    targetState = selectedTab,
+                    transitionSpec = {
+                        if (isReducedMotion) {
+                            fadeIn(animationSpec = snap()) togetherWith fadeOut(animationSpec = snap())
+                        } else {
+                            (fadeIn(animationSpec = tween(MotionDuration.TabSwitch, easing = MotionCurves.EaseOut)) +
+                                scaleIn(initialScale = 0.99f, animationSpec = tween(MotionDuration.TabSwitch, easing = MotionCurves.EaseOut)))
+                                .togetherWith(
+                                    fadeOut(animationSpec = tween(120, easing = MotionCurves.EaseOut))
+                                )
+                        }
+                    },
+                    label = "tab_crossfade"
+                ) { targetTab ->
+                    when (targetTab) {
+                        PrimaryTab.HOME -> {
+                            DashboardScreen(
+                                repository = repository,
+                                currentUser = currentUser,
+                                isMasterAdmin = isMasterAdmin,
+                                onNavigateToNewInvoice = { currentScreen = Screen.InvoiceComposer },
+                                onNavigateToExpressSales = { selectedTab = PrimaryTab.SELL },
+                                onNavigateToSettings = { currentScreen = Screen.Settings },
+                                onNavigateToDailySalesSummary = { currentScreen = Screen.DailySalesSummary },
+                                onNavigateToFleet = { currentScreen = Screen.FleetManagement },
+                                onNavigateToTeam = { currentScreen = Screen.TeamManagement },
+                                onNavigateToProducts = { selectedTab = PrimaryTab.PRODUCTS },
+                                onNavigateToCustomers = { currentScreen = Screen.Customers },
+                                onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
+                        PrimaryTab.SELL -> {
+                            ExpressSalesScreen(
+                                repository = repository,
+                                currentUser = currentUser,
+                                printerManager = printerManager,
+                                onNavigateToInvoiceDetail = { id -> currentScreen = Screen.InvoiceDetail(id) },
+                                onNavigateBack = { selectedTab = PrimaryTab.HOME },
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
+                        PrimaryTab.INVOICES -> {
+                            InvoicesHistoryScreen(
+                                repository = repository,
+                                onNavigateToNewInvoice = { currentScreen = Screen.InvoiceComposer },
+                                onNavigateToInvoiceDetail = { id -> currentScreen = Screen.InvoiceDetail(id) },
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
+                        PrimaryTab.PRODUCTS -> {
+                            ProductsScreen(
+                                repository = repository,
+                                onNavigateToAddProduct = { currentScreen = Screen.AddEditProduct(null) },
+                                onNavigateToEditProduct = { prodId -> currentScreen = Screen.AddEditProduct(prodId) },
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
+                        PrimaryTab.MORE -> {
+                            MoreHubScreen(
+                                currentUser = currentUser,
+                                isMasterAdmin = isMasterAdmin,
+                                onNavigateToCustomers = { currentScreen = Screen.Customers },
+                                onNavigateToStock = { currentScreen = Screen.Stock },
+                                onNavigateToPurchases = { currentScreen = Screen.Purchases },
+                                onNavigateToSuppliers = { currentScreen = Screen.Suppliers },
+                                onNavigateToFleet = { currentScreen = Screen.FleetManagement },
+                                onNavigateToReports = { currentScreen = Screen.DailySalesSummary },
+                                onNavigateToTeam = { currentScreen = Screen.TeamManagement },
+                                onNavigateToSettings = { currentScreen = Screen.Settings },
+                                onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
+                                onSignOut = { authManager.signOut() },
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
                     }
                 }
             }
@@ -237,11 +384,23 @@ private fun AuthenticatedApp(
             )
         }
 
+        is Screen.ExpressSales -> {
+            BackHandler { currentScreen = Screen.TabView }
+            com.example.kanak.ui.sales.ExpressSalesScreen(
+                repository = repository,
+                currentUser = currentUser,
+                printerManager = printerManager,
+                onNavigateToInvoiceDetail = { id -> currentScreen = Screen.InvoiceDetail(id) },
+                onNavigateBack = { currentScreen = Screen.TabView }
+            )
+        }
+
         is Screen.InvoiceComposer -> {
             BackHandler { currentScreen = Screen.TabView }
             InvoiceComposerScreen(
                 repository = repository,
                 currentUserId = currentUser.userId,
+                currentUser = currentUser,
                 onNavigateToInvoiceDetail = { id -> currentScreen = Screen.InvoiceDetail(id) },
                 onNavigateBack = { currentScreen = Screen.TabView }
             )
@@ -254,6 +413,7 @@ private fun AuthenticatedApp(
                 printerManager = printerManager,
                 invoiceId = scr.invoiceId,
                 isAdmin = currentUser.isAdmin,
+                currentUserId = currentUser.userId,
                 onNavigateBack = { currentScreen = Screen.TabView }
             )
         }
@@ -285,7 +445,20 @@ private fun AuthenticatedApp(
                 currentUser = currentUser,
                 licenseManager = licenseManager,
                 onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
+                onNavigateToFleet = { currentScreen = Screen.FleetManagement },
+                onNavigateToTeam = { currentScreen = Screen.TeamManagement },
+                onNavigateToDailySummary = { currentScreen = Screen.DailySalesSummary },
+                onNavigateToJoinBusiness = { currentScreen = Screen.JoinBusiness },
+                onNavigateToSystemDiagnostics = { currentScreen = Screen.SystemDiagnostics },
                 onNavigateBack = { currentScreen = Screen.TabView }
+            )
+        }
+
+        is Screen.SystemDiagnostics -> {
+            BackHandler { currentScreen = Screen.Settings }
+            com.example.kanak.ui.settings.SystemDiagnosticsScreen(
+                repository = repository,
+                onNavigateBack = { currentScreen = Screen.Settings }
             )
         }
 
@@ -294,6 +467,68 @@ private fun AuthenticatedApp(
             AdminLicensePortalScreen(
                 licenseManager = licenseManager,
                 onNavigateBack = { currentScreen = Screen.Settings }
+            )
+        }
+
+        is Screen.DailySalesSummary -> {
+            BackHandler { currentScreen = Screen.TabView }
+            DailySalesSummaryScreen(
+                repository = repository,
+                currentUser = currentUser,
+                printerManager = printerManager,
+                onNavigateBack = { currentScreen = Screen.TabView }
+            )
+        }
+
+        is Screen.FleetManagement -> {
+            BackHandler { currentScreen = Screen.TabView }
+            FleetManagementScreen(
+                repository = repository,
+                currentUser = currentUser,
+                onNavigateBack = { currentScreen = Screen.TabView }
+            )
+        }
+
+        is Screen.TeamManagement -> {
+            BackHandler { currentScreen = Screen.TabView }
+            TeamManagementScreen(
+                repository = repository,
+                currentUser = currentUser,
+                onNavigateBack = { currentScreen = Screen.TabView }
+            )
+        }
+
+        is Screen.JoinBusiness -> {
+            BackHandler { currentScreen = Screen.TabView }
+            JoinBusinessScreen(
+                repository = repository,
+                currentUser = currentUser,
+                licenseManager = licenseManager,
+                onJoinedSuccess = { currentScreen = Screen.TabView },
+                onRegisterNewCompany = { currentScreen = Screen.TabView }
+            )
+        }
+
+        is Screen.Customers -> {
+            BackHandler { currentScreen = Screen.TabView }
+            CustomersScreen(
+                repository = repository,
+                currentUserId = currentUser.userId,
+                onNavigateToInvoiceDetail = { id -> currentScreen = Screen.InvoiceDetail(id) },
+                onNavigateToNewInvoice = { currentScreen = Screen.InvoiceComposer },
+                modifier = modifier
+            )
+        }
+
+        is Screen.Stock -> {
+            BackHandler { currentScreen = Screen.TabView }
+            StockScreen(
+                repository = repository,
+                currentUserId = currentUser.userId,
+                isAdmin = currentUser.isAdmin,
+                onNavigateToPurchases = { currentScreen = Screen.Purchases },
+                onNavigateToSuppliers = { currentScreen = Screen.Suppliers },
+                modifier = modifier
             )
         }
     }

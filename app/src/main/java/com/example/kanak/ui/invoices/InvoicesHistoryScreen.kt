@@ -38,6 +38,8 @@ fun InvoicesHistoryScreen(
             list = list.filter { !it.isVoid }
         } else if (selectedFilter == "VOID") {
             list = list.filter { it.isVoid }
+        } else if (selectedFilter == "PENDING") {
+            list = list.filter { it.isPendingSync }
         }
 
         if (searchQuery.isNotBlank()) {
@@ -72,7 +74,10 @@ fun InvoicesHistoryScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp)
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
+            // Live Connection and Sync Banner
+            com.example.kanak.ui.components.SyncStatusBar(repository = repository)
+
+            Spacer(modifier = Modifier.height(4.dp))
 
             // Search Bar
             KanakSearchField(
@@ -84,7 +89,7 @@ fun InvoicesHistoryScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Filter Chips (All, Posted, Void)
+            // Filter Chips (All, Posted, Pending Sync, Void)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -98,6 +103,11 @@ fun InvoicesHistoryScreen(
                     label = "Posted (${invoices.count { !it.isVoid }})",
                     selected = selectedFilter == "POSTED",
                     onClick = { selectedFilter = "POSTED" }
+                )
+                KanakFilterChip(
+                    label = "Pending (${invoices.count { it.isPendingSync }})",
+                    selected = selectedFilter == "PENDING",
+                    onClick = { selectedFilter = "PENDING" }
                 )
                 KanakFilterChip(
                     label = "Void (${invoices.count { it.isVoid }})",

@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/ic_kanak_logo_1793379109040"
+        android:drawable="@drawable/kanak_app_icon_1794073715264"
         android:gravity="center" />
 </layer-list>

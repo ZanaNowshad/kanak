@@ -4,6 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -34,8 +37,13 @@ import com.example.kanak.printing.BluetoothPrinterManager
 import com.example.kanak.printing.EscPosReceiptRenderer
 import com.example.kanak.printing.PrintResult
 import com.example.kanak.ui.components.KanakTopBar
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import com.example.kanak.domain.models.Invoice
+import com.example.kanak.printing.KanakAndroidPrintHelper
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
+import java.math.BigDecimal
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +52,7 @@ fun InvoiceDetailScreen(
     printerManager: BluetoothPrinterManager,
     invoiceId: String,
     isAdmin: Boolean,
+    currentUserId: String = "driver",
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -53,6 +62,8 @@ fun InvoiceDetailScreen(
     val invoice = remember(invoiceId, invoices) {
         invoices.find { it.invoiceId == invoiceId }
     }
+
+    var showPaymentDialog by remember { mutableStateOf(false) }
 
     // Sub-view: "DETAIL", "PRINT_RECEIPT", "VOID_INVOICE"
     var currentSubView by remember { mutableStateOf("DETAIL") }
@@ -185,6 +196,53 @@ fun InvoiceDetailScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    // Android System Print / PDF Card
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = KanakSurface),
+                        border = CardDefaults.outlinedCardBorder(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Surface(shape = CircleShape, color = KanakAccentLight, modifier = Modifier.size(40.dp)) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.Print, contentDescription = null, tint = KanakPrimaryBlue, modifier = Modifier.size(20.dp))
+                                    }
+                                }
+                                Column {
+                                    Text("Android Print / PDF", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                                    Text("Print to standard roll, A4 or PDF", style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp))
+                                }
+                            }
+                            Button(
+                                onClick = {
+                                    KanakAndroidPrintHelper.printInvoiceReceipt(
+                                        context = context,
+                                        invoice = invoice,
+                                        businessName = repository.getBusinessName(),
+                                        businessAddress = repository.getBusinessAddress(),
+                                        vatNumber = repository.getVatNumber()
+                                    )
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue)
+                            ) {
+                                Text("Print PDF", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+
                     // Select Printer Card
                     Card(
                         shape = RoundedCornerShape(14.dp),
@@ -320,8 +378,21 @@ fun InvoiceDetailScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        Card(
-                            shape = RoundedCornerShape(8.dp),
+                        val isReducedMotion = LocalReducedMotion.current
+                        AnimatedVisibility(
+                            visible = true,
+                            enter = if (isReducedMotion) {
+                                fadeIn(animationSpec = snap())
+                            } else {
+                                fadeIn(animationSpec = tween(durationMillis = 180, easing = MotionCurves.EaseOut)) +
+                                    expandVertically(
+                                        expandFrom = Alignment.Top,
+                                        animationSpec = tween(durationMillis = 250, easing = MotionCurves.EaseOut)
+                                    )
+                            }
+                        ) {
+                            Card(
+                                shape = RoundedCornerShape(8.dp),
                             colors = CardDefaults.cardColors(containerColor = Color(0xFFFCFDFD)),
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
@@ -444,6 +515,7 @@ fun InvoiceDetailScreen(
                                 )
                             }
                         }
+                    }
                     }
 
                     if (printStatusMessage != null) {
@@ -707,10 +779,36 @@ fun InvoiceDetailScreen(
                 ) {
                     // Green Banner at top matching Board 5 Screen 2
                     if (!invoice.isVoid) {
+                        val isReducedMotion = LocalReducedMotion.current
+                        var hasAnimated by remember { mutableStateOf(false) }
+                        LaunchedEffect(Unit) {
+                            hasAnimated = true
+                        }
+
+                        val bannerScale by animateFloatAsState(
+                            targetValue = if (isReducedMotion || hasAnimated) 1.0f else 0.92f,
+                            animationSpec = if (isReducedMotion) snap() else MotionSprings.Pop,
+                            label = "invoice_success_badge_scale"
+                        )
+                        val bannerAlpha by animateFloatAsState(
+                            targetValue = if (isReducedMotion || hasAnimated) 1.0f else 0.0f,
+                            animationSpec = tween(
+                                durationMillis = if (isReducedMotion) 0 else 160,
+                                easing = MotionCurves.EaseOut
+                            ),
+                            label = "invoice_success_badge_alpha"
+                        )
+
                         Card(
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(containerColor = KanakSuccessBackground),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    scaleX = bannerScale
+                                    scaleY = bannerScale
+                                    alpha = bannerAlpha
+                                }
                         ) {
                             Row(
                                 modifier = Modifier.padding(12.dp),
@@ -791,18 +889,47 @@ fun InvoiceDetailScreen(
                                     }
                                 }
 
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (invoice.isVoid) KanakErrorBackground else KanakSuccessBackground
-                                ) {
-                                    Text(
-                                        text = invoice.status,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (invoice.isVoid) KanakError else KanakSuccess
-                                        ),
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (invoice.isVoid) KanakErrorBackground else KanakSuccessBackground
+                                    ) {
+                                        Text(
+                                            text = invoice.status,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (invoice.isVoid) KanakError else KanakSuccess
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = when {
+                                            invoice.isSyncConflict -> KanakErrorBackground
+                                            invoice.isSynced -> KanakSuccessBackground
+                                            else -> KanakAccentLight
+                                        }
+                                    ) {
+                                        Text(
+                                            text = when {
+                                                invoice.isSyncConflict -> "CONFLICT"
+                                                invoice.isSynced -> "SERVER CONFIRMED"
+                                                else -> "LOCAL ONLY"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = when {
+                                                    invoice.isSyncConflict -> KanakError
+                                                    invoice.isSynced -> KanakSuccess
+                                                    else -> KanakPrimaryBlue
+                                                },
+                                                fontSize = 10.sp
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                        )
+                                    }
                                 }
                             }
 
@@ -819,6 +946,30 @@ fun InvoiceDetailScreen(
                                 Column(horizontalAlignment = Alignment.End) {
                                     Text("Cashier", style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText))
                                     Text(invoice.createdBy.ifBlank { "Sales Operator" }, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                                }
+                            }
+
+                            if (invoice.vanCode.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Fleet Van", style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText))
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = KanakAccentLight
+                                    ) {
+                                        Text(
+                                            text = invoice.vanCode,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = KanakPrimaryBlue
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -916,8 +1067,200 @@ fun InvoiceDetailScreen(
                         }
                     }
 
+                    // Payment Terms & Credit Ledger Status Card
+                    if (invoice.isCredit) {
+                        val isCleared = invoice.balanceDue <= BigDecimal.ZERO || invoice.isPaid
+                        Card(
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isCleared) Color(0xFFF0FDF4) else Color(0xFFFFFBEB)
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (isCleared) Color(0xFF22C55E) else Color(0xFFF59E0B)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (isCleared) Color(0xFFDCFCE7) else Color(0xFFFEF3C7),
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = if (isCleared) Icons.Default.CheckCircle else Icons.Default.AccountBalanceWallet,
+                                                    contentDescription = null,
+                                                    tint = if (isCleared) Color(0xFF16A34A) else Color(0xFFD97706),
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text("Payment Mode: CREDIT", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                                            Text(
+                                                text = if (isCleared) "All payments received" else "Payment pending from customer",
+                                                style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                                            )
+                                        }
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (isCleared) Color(0xFFBBF7D0) else Color(0xFFFDE68A)
+                                    ) {
+                                        Text(
+                                            text = if (isCleared) "PAID" else "DUE",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isCleared) Color(0xFF15803D) else Color(0xFF92400E)
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = KanakDivider)
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Amount Paid:", style = MaterialTheme.typography.bodyMedium.copy(color = KanakSecondaryText))
+                                    Text(
+                                        BahrainFinancials.formatBhd(invoice.amountPaid),
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = Color(0xFF16A34A))
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Remaining Balance Due:", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                                    Text(
+                                        BahrainFinancials.formatBhd(invoice.balanceDue),
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontWeight = FontWeight.Black,
+                                            color = if (isCleared) Color(0xFF16A34A) else Color(0xFFDC2626)
+                                        )
+                                    )
+                                }
+
+                                if (!isCleared && !invoice.isVoid) {
+                                    Spacer(modifier = Modifier.height(14.dp))
+                                    Button(
+                                        onClick = { showPaymentDialog = true },
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFFD97706),
+                                            contentColor = Color.White
+                                        ),
+                                        modifier = Modifier.fillMaxWidth().height(46.dp).testTag("detail_receive_payment_button")
+                                    ) {
+                                        Icon(Icons.Default.Payments, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Receive Payment", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(72.dp))
                 }
+            }
+
+            // Payment Receipt Dialog
+            if (showPaymentDialog) {
+                val balanceDue = invoice.balanceDue
+                var paymentAmountStr by remember(invoice) { mutableStateOf(balanceDue.stripTrailingZeros().toPlainString()) }
+                var paymentError by remember { mutableStateOf<String?>(null) }
+                var isProcessing by remember { mutableStateOf(false) }
+
+                AlertDialog(
+                    onDismissRequest = { if (!isProcessing) showPaymentDialog = false },
+                    icon = {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFFFEF3C7),
+                            modifier = Modifier.size(52.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Payments, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(28.dp))
+                            }
+                        }
+                    },
+                    title = {
+                        Text("Receive Credit Payment", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Customer: ${invoice.customerName}")
+                            Text("Remaining Due: ${BahrainFinancials.formatBhd(balanceDue)}", fontWeight = FontWeight.Bold, color = Color(0xFFD97706))
+
+                            OutlinedTextField(
+                                value = paymentAmountStr,
+                                onValueChange = {
+                                    paymentAmountStr = it
+                                    paymentError = null
+                                },
+                                label = { Text("Payment Amount (BHD)") },
+                                leadingIcon = { Text("BHD", fontWeight = FontWeight.Bold, color = KanakPrimaryBlue, modifier = Modifier.padding(start = 12.dp, end = 4.dp)) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().testTag("payment_amount_input_dialog")
+                            )
+
+                            if (paymentError != null) {
+                                Text(paymentError ?: "", color = KanakError, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                val amt = BahrainFinancials.parseBhd(paymentAmountStr)
+                                if (amt == null || amt <= BigDecimal.ZERO) {
+                                    paymentError = "Enter valid positive payment amount."
+                                    return@Button
+                                }
+                                if (amt > balanceDue) {
+                                    paymentError = "Payment cannot exceed balance due."
+                                    return@Button
+                                }
+
+                                scope.launch {
+                                    isProcessing = true
+                                    val res = repository.recordInvoicePayment(
+                                        invoiceId = invoice.invoiceId,
+                                        amountToPay = amt,
+                                        recordedBy = currentUserId
+                                    )
+                                    isProcessing = false
+                                    res.onSuccess {
+                                        Toast.makeText(context, "Payment of ${BahrainFinancials.formatBhd(amt)} recorded!", Toast.LENGTH_LONG).show()
+                                        showPaymentDialog = false
+                                    }.onFailure {
+                                        paymentError = it.message ?: "Failed to record payment"
+                                    }
+                                }
+                            },
+                            enabled = !isProcessing && paymentAmountStr.isNotBlank(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706), contentColor = Color.White)
+                        ) {
+                            Text("Confirm Payment", fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        OutlinedButton(onClick = { showPaymentDialog = false }, shape = RoundedCornerShape(10.dp)) {
+                            Text("Cancel")
+                        }
+                    }
+                )
             }
         }
     }

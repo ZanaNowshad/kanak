@@ -1,6 +1,6 @@
 {
   "name": "Kanak",
-  "description": "'Kanak' by zedosai.com - Production-grade Bahrain FMCG wholesale van sales application with Google Sheets authoritative datastore, exact VAT calculations, and ESC/POS thermal receipt printing.",
+  "description": "Kanak - Production-grade Bahrain FMCG wholesale van sales application with multi-van inventory, exact VAT, and ESC/POS thermal printing.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

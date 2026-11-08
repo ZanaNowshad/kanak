@@ -5,6 +5,7 @@ import com.example.kanak.data.remote.GatewayRequest
 import com.example.kanak.data.remote.KanakApiService
 import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.domain.models.*
+import com.example.kanak.licensing.LicenseManager
 import com.example.kanak.images.BingThumbnailUrlBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +13,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
@@ -33,6 +36,7 @@ class KanakRepository(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.IO)
     private val mutationMutex = Mutex()
     private val prefs = context.getSharedPreferences("kanak_repo_prefs", Context.MODE_PRIVATE)
+    private val roomDb by lazy { com.example.kanak.data.local.KanakDatabase.getInstance(context) }
     private val firebaseManager by lazy { com.example.kanak.data.firebase.KanakFirebaseManager(context) }
     private val moshi = com.squareup.moshi.Moshi.Builder()
         .add(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
@@ -76,8 +80,55 @@ class KanakRepository(private val context: Context) {
     private val _stockAdjustments = MutableStateFlow<List<StockAdjustment>>(emptyList())
     val stockAdjustments: StateFlow<List<StockAdjustment>> = _stockAdjustments.asStateFlow()
 
+    // -------------------------------------------------------------
+    // MULTI-TENANT, MULTI-VAN & FLEET STATEFLOWS
+    // -------------------------------------------------------------
+    private val _currentBusiness = MutableStateFlow(loadCurrentBusiness())
+    val currentBusiness: StateFlow<Business> = _currentBusiness.asStateFlow()
+
+    private val _vans = MutableStateFlow<List<Van>>(loadVans())
+    val vans: StateFlow<List<Van>> = _vans.asStateFlow()
+
+    private val _vanStocks = MutableStateFlow<Map<String, Map<String, BigDecimal>>>(loadVanStocks())
+    val vanStocks: StateFlow<Map<String, Map<String, BigDecimal>>> = _vanStocks.asStateFlow()
+
+    private val _teamMemberships = MutableStateFlow<List<EmployeeMembership>>(loadMemberships())
+    val teamMemberships: StateFlow<List<EmployeeMembership>> = _teamMemberships.asStateFlow()
+
+    private val _pendingInvitations = MutableStateFlow<List<EmployeeInvitation>>(loadInvitations())
+    val pendingInvitations: StateFlow<List<EmployeeInvitation>> = _pendingInvitations.asStateFlow()
+
+    private val _stockTransfers = MutableStateFlow<List<StockTransfer>>(loadStockTransfers())
+    val stockTransfers: StateFlow<List<StockTransfer>> = _stockTransfers.asStateFlow()
+
+    private val _auditRecords = MutableStateFlow<List<AuditRecord>>(loadAuditRecords())
+    val auditRecords: StateFlow<List<AuditRecord>> = _auditRecords.asStateFlow()
+
     private val _dashboardSummary = MutableStateFlow(DashboardSummary())
     val dashboardSummary: StateFlow<DashboardSummary> = _dashboardSummary.asStateFlow()
+
+    enum class SyncState(val label: String) {
+        ONLINE("Online"),
+        OFFLINE("Offline"),
+        PENDING("Pending Sync"),
+        SYNCING("Syncing"),
+        CONFLICT("Conflict")
+    }
+
+    private val _isOnline = MutableStateFlow(true)
+    val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
+
+    private val _syncState = MutableStateFlow(SyncState.ONLINE)
+    val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
+
+    private val _pendingSyncCount = MutableStateFlow(0)
+    val pendingSyncCount: StateFlow<Int> = _pendingSyncCount.asStateFlow()
+
+    private val _conflictCount = MutableStateFlow(0)
+    val conflictCount: StateFlow<Int> = _conflictCount.asStateFlow()
+
+    private val _conflictMessage = MutableStateFlow<String?>(null)
+    val conflictMessage: StateFlow<String?> = _conflictMessage.asStateFlow()
 
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
@@ -86,27 +137,120 @@ class KanakRepository(private val context: Context) {
     val lastSyncError: StateFlow<String?> = _lastSyncError.asStateFlow()
 
     init {
-        if (!loadLocalDatabase()) {
-            seedInitialFmcgData()
-            saveLocalDatabase()
+        loadLocalDatabase()
+        // Strictly purge any legacy mock FMCG data to ensure 100% clean production state
+        if (_products.value.any { it.productId.startsWith("prod_00") || it.name.contains("Almarai", ignoreCase = true) }) {
+            clearAllData()
         }
         recalculateDashboard()
+        setupNetworkMonitoring()
+        refreshPendingSyncCount()
+    }
+
+    private fun setupNetworkMonitoring() {
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            if (cm != null) {
+                @Suppress("DEPRECATION")
+                val activeNet = cm.activeNetworkInfo
+                @Suppress("DEPRECATION")
+                _isOnline.value = activeNet != null && activeNet.isConnectedOrConnecting
+                updateSyncState()
+                val req = android.net.NetworkRequest.Builder().build()
+                cm.registerNetworkCallback(req, object : android.net.ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        _isOnline.value = true
+                        updateSyncState()
+                    }
+                    override fun onLost(network: android.net.Network) {
+                        _isOnline.value = false
+                        updateSyncState()
+                    }
+                })
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun updateSyncState() {
+        if (_conflictCount.value > 0) {
+            _syncState.value = SyncState.CONFLICT
+        } else if (_isSyncing.value) {
+            _syncState.value = SyncState.SYNCING
+        } else if (!_isOnline.value) {
+            _syncState.value = SyncState.OFFLINE
+        } else if (_pendingSyncCount.value > 0) {
+            _syncState.value = SyncState.PENDING
+        } else {
+            _syncState.value = SyncState.ONLINE
+        }
+    }
+
+    fun refreshPendingSyncCount() {
+        scope.launch {
+            try {
+                val pendingInvs = roomDb.invoiceDao().getInvoicesBySyncStatus(com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_PENDING)
+                val pendingItems = roomDb.syncQueueDao().getPendingItems()
+                _pendingSyncCount.value = pendingInvs.size + pendingItems.size
+                updateSyncState()
+            } catch (_: Exception) {}
+        }
     }
 
     fun getGatewayUrl(): String? {
         return prefs.getString("gateway_url", null)
     }
 
+    fun getGoogleSheetId(): String? {
+        val url = getGatewayUrl() ?: return prefs.getString("google_sheet_id", null)
+        return if (url.contains("spreadsheetId=")) {
+            url.substringAfter("spreadsheetId=").substringBefore("&")
+        } else {
+            prefs.getString("google_sheet_id", null)
+        }
+    }
+
     fun setGatewayUrl(url: String?) {
         prefs.edit().putString("gateway_url", url?.trim()).apply()
     }
 
+    /**
+     * Automated Google Sheets Workbook Provisioning Helper (KANAK-SPEC-1.0.0 Section 6).
+     * Automatically binds the auto-cloned master company Google Sheet to the Kanak sync gateway.
+     */
+    fun autoProvisionGoogleWorkbook(companyName: String, spreadsheetId: String, gatewayBaseUrl: String = "https://script.google.com/macros/s/AKfycbxKanakSyncGateway/exec") {
+        val autoGatewayUrl = if (gatewayBaseUrl.contains("?")) {
+            "$gatewayBaseUrl&spreadsheetId=$spreadsheetId"
+        } else {
+            "$gatewayBaseUrl?spreadsheetId=$spreadsheetId"
+        }
+        setGatewayUrl(autoGatewayUrl)
+        setBusinessName(companyName)
+        android.util.Log.i("KanakSync", "Automated Google Workbook connected for $companyName (Spreadsheet ID: $spreadsheetId)")
+    }
+
     fun getBusinessName(): String {
-        return prefs.getString("biz_name", "KANAK FMCG WHOLESALE W.L.L.") ?: "KANAK FMCG WHOLESALE W.L.L."
+        val stored = prefs.getString("biz_name", null)
+        if (!stored.isNullOrBlank() && !stored.contains("W.L.L.", ignoreCase = true)) {
+            return stored.trim()
+        }
+        val licProfile = com.example.kanak.licensing.LicenseManager(context).loadProfile()
+        if (licProfile.companyName.isNotBlank() && !licProfile.companyName.contains("W.L.L.", ignoreCase = true) && !licProfile.companyName.contains("Platform Admin", ignoreCase = true)) {
+            setBusinessName(licProfile.companyName)
+            return licProfile.companyName.trim()
+        }
+        if (!stored.isNullOrBlank()) {
+            val cleaned = stored.replace(Regex("(?i)\\s+W\\.?L\\.?L\\.?", RegexOption.IGNORE_CASE), "").trim()
+            if (cleaned.isNotBlank()) {
+                setBusinessName(cleaned)
+                return cleaned
+            }
+        }
+        return "KANAK FMCG Wholesale"
     }
 
     fun setBusinessName(name: String) {
-        prefs.edit().putString("biz_name", name.trim()).apply()
+        val cleaned = name.replace(Regex("(?i)\\s+W\\.?L\\.?L\\.?", RegexOption.IGNORE_CASE), "").trim()
+        prefs.edit().putString("biz_name", cleaned.ifBlank { "KANAK FMCG Wholesale" }).apply()
     }
 
     fun getBusinessAddress(): String {
@@ -124,6 +268,45 @@ class KanakRepository(private val context: Context) {
 
     fun setVatNumber(trn: String) {
         prefs.edit().putString("biz_vat", trn.trim()).apply()
+    }
+
+    // -------------------------------------------------------------
+    // BAHRAIN VAT PERCENTAGE CONFIGURATION (Admin Configurable)
+    // -------------------------------------------------------------
+    companion object {
+        const val PREF_KEY_VAT_PERCENTAGE = "bahrain_vat_percentage"
+        val DEFAULT_VAT_PERCENTAGE: BigDecimal = BigDecimal("10.00")
+
+        @Volatile
+        private var INSTANCE: KanakRepository? = null
+
+        fun getInstance(context: Context): KanakRepository {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: KanakRepository(context.applicationContext).also { INSTANCE = it }
+            }
+        }
+    }
+
+    private val _configuredVatPercentage = MutableStateFlow(loadConfiguredVatPercentage())
+    val configuredVatPercentage: StateFlow<BigDecimal> = _configuredVatPercentage.asStateFlow()
+
+    private fun loadConfiguredVatPercentage(): BigDecimal {
+        val str = prefs.getString(PREF_KEY_VAT_PERCENTAGE, "10.00") ?: "10.00"
+        return try {
+            BigDecimal(str).setScale(2, java.math.RoundingMode.HALF_UP)
+        } catch (e: Exception) {
+            DEFAULT_VAT_PERCENTAGE
+        }
+    }
+
+    fun getConfiguredVatPercentage(): BigDecimal = _configuredVatPercentage.value
+
+    fun getConfiguredVatRate(): BigDecimal = BahrainFinancials.percentageToRate(_configuredVatPercentage.value)
+
+    fun setConfiguredVatPercentage(percentage: BigDecimal) {
+        val scaled = percentage.setScale(2, java.math.RoundingMode.HALF_UP)
+        prefs.edit().putString(PREF_KEY_VAT_PERCENTAGE, scaled.toPlainString()).apply()
+        _configuredVatPercentage.value = scaled
     }
 
     // -------------------------------------------------------------
@@ -173,6 +356,10 @@ class KanakRepository(private val context: Context) {
         )
 
         _products.value = listOf(product) + _products.value
+        try {
+            roomDb.productDao().insertOrUpdate(com.example.kanak.data.local.ProductEntity.fromDomain(product))
+        } catch (_: Exception) {}
+        saveLocalDatabase()
         syncToGatewayIfConfigured("create_product", mapOf(
             "product_id" to product.productId,
             "barcode" to product.barcode,
@@ -186,6 +373,51 @@ class KanakRepository(private val context: Context) {
         ))
 
         return Result.success(product)
+    }
+
+    suspend fun upsertProductLocally(product: Product) {
+        val current = _products.value.toMutableList()
+        val idx = current.indexOfFirst { it.productId == product.productId }
+        if (idx >= 0) {
+            current[idx] = product
+        } else {
+            current.add(0, product)
+        }
+        _products.value = current
+        try {
+            roomDb.productDao().insertOrUpdate(com.example.kanak.data.local.ProductEntity.fromDomain(product))
+        } catch (_: Exception) {}
+        saveLocalDatabase()
+    }
+
+    suspend fun upsertCustomerLocally(customer: Customer) {
+        val current = _customers.value.toMutableList()
+        val idx = current.indexOfFirst { it.customerId == customer.customerId }
+        if (idx >= 0) {
+            current[idx] = customer
+        } else {
+            current.add(0, customer)
+        }
+        _customers.value = current
+        try {
+            roomDb.customerDao().insertOrUpdate(com.example.kanak.data.local.CustomerEntity.fromDomain(customer))
+        } catch (_: Exception) {}
+        saveLocalDatabase()
+    }
+
+    suspend fun upsertSupplierLocally(supplier: Supplier) {
+        val current = _suppliers.value.toMutableList()
+        val idx = current.indexOfFirst { it.supplierId == supplier.supplierId }
+        if (idx >= 0) {
+            current[idx] = supplier
+        } else {
+            current.add(0, supplier)
+        }
+        _suppliers.value = current
+        try {
+            roomDb.supplierDao().insertOrUpdate(com.example.kanak.data.local.SupplierEntity.fromDomain(supplier))
+        } catch (_: Exception) {}
+        saveLocalDatabase()
     }
 
     suspend fun updateProduct(
@@ -242,6 +474,12 @@ class KanakRepository(private val context: Context) {
         )
 
         _products.value = _products.value.map { if (it.productId == productId) updated else it }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.productDao().insertOrUpdate(com.example.kanak.data.local.ProductEntity.fromDomain(updated))
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
         syncToGatewayIfConfigured("update_product", mapOf(
             "product_id" to updated.productId,
             "barcode" to updated.barcode,
@@ -276,6 +514,12 @@ class KanakRepository(private val context: Context) {
         }
 
         _products.value = _products.value.filter { it.productId != productId }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.productDao().deleteById(productId)
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
         syncToGatewayIfConfigured("delete_product", mapOf("product_id" to productId))
         return Result.success(Unit)
     }
@@ -304,6 +548,10 @@ class KanakRepository(private val context: Context) {
         )
 
         _customers.value = listOf(customer) + _customers.value
+        try {
+            roomDb.customerDao().insertOrUpdate(com.example.kanak.data.local.CustomerEntity.fromDomain(customer))
+        } catch (_: Exception) {}
+        saveLocalDatabase()
         syncToGatewayIfConfigured("create_customer", mapOf(
             "customer_id" to customer.customerId,
             "business_name" to customer.businessName,
@@ -329,6 +577,12 @@ class KanakRepository(private val context: Context) {
         )
 
         _customers.value = _customers.value.map { if (it.customerId == customer.customerId) updated else it }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.customerDao().insertOrUpdate(com.example.kanak.data.local.CustomerEntity.fromDomain(updated))
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
         syncToGatewayIfConfigured("update_customer", mapOf(
             "customer_id" to updated.customerId,
             "business_name" to updated.businessName,
@@ -347,6 +601,12 @@ class KanakRepository(private val context: Context) {
         }
 
         _customers.value = _customers.value.filter { it.customerId != customerId }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.customerDao().deleteById(customerId)
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
         syncToGatewayIfConfigured("delete_customer", mapOf("customer_id" to customerId))
         return Result.success(Unit)
     }
@@ -368,6 +628,12 @@ class KanakRepository(private val context: Context) {
         )
 
         _suppliers.value = listOf(supplier) + _suppliers.value
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.supplierDao().insertOrUpdate(com.example.kanak.data.local.SupplierEntity.fromDomain(supplier))
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
         syncToGatewayIfConfigured("create_supplier", mapOf(
             "supplier_id" to supplier.supplierId,
             "name" to supplier.name,
@@ -385,6 +651,12 @@ class KanakRepository(private val context: Context) {
 
         val updated = supplier.copy(name = trimmedName, contact = supplier.contact.trim())
         _suppliers.value = _suppliers.value.map { if (it.supplierId == supplier.supplierId) updated else it }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.supplierDao().insertOrUpdate(com.example.kanak.data.local.SupplierEntity.fromDomain(updated))
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
         syncToGatewayIfConfigured("update_supplier", mapOf(
             "supplier_id" to updated.supplierId,
             "name" to updated.name,
@@ -401,6 +673,12 @@ class KanakRepository(private val context: Context) {
         }
 
         _suppliers.value = _suppliers.value.filter { it.supplierId != supplierId }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.supplierDao().deleteById(supplierId)
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
         syncToGatewayIfConfigured("delete_supplier", mapOf("supplier_id" to supplierId))
         return Result.success(Unit)
     }
@@ -447,6 +725,13 @@ class KanakRepository(private val context: Context) {
 
         _purchases.value = listOf(purchase) + _purchases.value
         _products.value = _products.value.map { if (it.productId == productId) updatedProduct else it }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.purchaseDao().insertOrUpdate(com.example.kanak.data.local.PurchaseEntity.fromDomain(purchase))
+                roomDb.productDao().updateStock(productId, updatedProduct.stockQty)
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
 
         syncToGatewayIfConfigured("create_purchase", mapOf(
             "purchase_id" to purchase.purchaseId,
@@ -496,6 +781,13 @@ class KanakRepository(private val context: Context) {
 
         _purchases.value = _purchases.value.map { if (it.purchaseId == purchaseId) updatedPurchase else it }
         _products.value = _products.value.map { if (it.productId == product.productId) updatedProduct else it }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.purchaseDao().insertOrUpdate(com.example.kanak.data.local.PurchaseEntity.fromDomain(updatedPurchase))
+                roomDb.productDao().updateStock(product.productId, updatedProduct.stockQty)
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
 
         syncToGatewayIfConfigured("correct_purchase", mapOf(
             "purchase_id" to purchaseId,
@@ -541,6 +833,14 @@ class KanakRepository(private val context: Context) {
         _purchases.value = _purchases.value.map { if (it.purchaseId == purchaseId) reversedPurchase else it }
         _stockAdjustments.value = listOf(compensatingAdjustment) + _stockAdjustments.value
         _products.value = _products.value.map { if (it.productId == product.productId) updatedProduct else it }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.purchaseDao().insertOrUpdate(com.example.kanak.data.local.PurchaseEntity.fromDomain(reversedPurchase))
+                roomDb.stockAdjustmentDao().insert(com.example.kanak.data.local.StockAdjustmentEntity.fromDomain(compensatingAdjustment))
+                roomDb.productDao().updateStock(product.productId, updatedProduct.stockQty)
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
 
         syncToGatewayIfConfigured("adjust_stock", mapOf(
             "adjustment_id" to compensatingAdjustment.adjustmentId,
@@ -580,7 +880,10 @@ class KanakRepository(private val context: Context) {
         customerId: String,
         proposedLines: List<ProposedLine>,
         createdBy: String,
-        preAssignedInvoiceId: String? = null
+        preAssignedInvoiceId: String? = null,
+        paymentType: String = Invoice.PAYMENT_CASH,
+        vanId: String = "",
+        vanCode: String = ""
     ): Result<Invoice> = mutationMutex.withLock {
         val customer = _customers.value.find { it.customerId == customerId }
             ?: return Result.failure(IllegalArgumentException("Invalid customer"))
@@ -600,6 +903,19 @@ class KanakRepository(private val context: Context) {
         val lineCalcs = mutableListOf<BahrainFinancials.LineCalculation>()
         val updatedProducts = _products.value.toMutableList()
         val invoiceLines = mutableListOf<InvoiceLine>()
+
+        // Check van stock if van is specified
+        if (vanId.isNotBlank()) {
+            val vanStockMap = _vanStocks.value[vanId] ?: emptyMap()
+            for (item in proposedLines) {
+                val availableInVan = vanStockMap[item.productId] ?: BigDecimal.ZERO
+                // If van has inventory tracking and stock is less than requested
+                if (vanStockMap.isNotEmpty() && availableInVan < item.qty) {
+                    val prod = _products.value.find { it.productId == item.productId }
+                    return Result.failure(IllegalStateException("Insufficient van stock for '${prod?.name ?: item.productId}' in $vanCode. Available: $availableInVan, requested: ${item.qty}"))
+                }
+            }
+        }
 
         for (item in proposedLines) {
             if (item.qty <= BigDecimal.ZERO) {
@@ -645,8 +961,12 @@ class KanakRepository(private val context: Context) {
 
         // Calculate authoritative header totals
         val totals = BahrainFinancials.calculateInvoiceTotals(lineCalcs)
-        val invoiceNumber = generateNextInvoiceNumber()
+        val invoiceNumber = generateNextInvoiceNumber(vanCode)
         val nowBahrain = getBahrainTimestampString()
+
+        val isCredit = paymentType.equals(Invoice.PAYMENT_CREDIT, ignoreCase = true)
+        val paymentStatus = if (isCredit) Invoice.PAYMENT_STATUS_UNPAID else Invoice.PAYMENT_STATUS_PAID
+        val amountPaid = if (isCredit) BigDecimal.ZERO else totals.total
 
         val invoice = Invoice(
             invoiceId = invoiceId,
@@ -660,13 +980,84 @@ class KanakRepository(private val context: Context) {
             status = Invoice.STATUS_POSTED,
             createdBy = createdBy,
             voidedAt = null,
-            lines = invoiceLines
+            lines = invoiceLines,
+            paymentType = paymentType,
+            paymentStatus = paymentStatus,
+            amountPaid = amountPaid,
+            vanId = vanId,
+            vanCode = vanCode,
+            businessId = getBusinessId(),
+            syncStatus = Invoice.SYNC_STATUS_PENDING,
+            idempotencyKey = invoiceId
         )
+
+        // Deduct van stock if van is specified
+        if (vanId.isNotBlank()) {
+            val currentVanStocks = _vanStocks.value.toMutableMap()
+            val vanStockMap = (currentVanStocks[vanId] ?: emptyMap()).toMutableMap()
+            for (item in proposedLines) {
+                val currentQty = vanStockMap[item.productId] ?: BigDecimal.ZERO
+                vanStockMap[item.productId] = currentQty.subtract(item.qty).max(BigDecimal.ZERO)
+            }
+            currentVanStocks[vanId] = vanStockMap
+            _vanStocks.value = currentVanStocks
+        }
 
         // Commit atomically to state
         _products.value = updatedProducts
         _invoices.value = listOf(invoice) + _invoices.value
         recalculateDashboard()
+
+        // Insert into Room database with PENDING status for offline resilience
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.invoiceDao().insertFullInvoice(
+                    com.example.kanak.data.local.InvoiceEntity.fromDomain(invoice, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_PENDING),
+                    invoice.lines.map { com.example.kanak.data.local.InvoiceLineEntity.fromDomain(it) }
+                )
+                for (prod in updatedProducts) {
+                    roomDb.productDao().updateStock(prod.productId, prod.stockQty)
+                }
+                // Queue for background sync
+                val payloadMap = mapOf(
+                    "invoice_id" to invoice.invoiceId,
+                    "invoice_number" to invoice.invoiceNumber,
+                    "customer_id" to invoice.customerId,
+                    "customer_name" to invoice.customerName,
+                    "date" to invoice.date,
+                    "subtotal" to invoice.subtotal.toPlainString(),
+                    "vat_total" to invoice.vatTotal.toPlainString(),
+                    "total" to invoice.total.toPlainString(),
+                    "status" to invoice.status,
+                    "created_by" to invoice.createdBy,
+                    "payment_type" to invoice.paymentType,
+                    "payment_status" to invoice.paymentStatus,
+                    "amount_paid" to invoice.amountPaid.toPlainString(),
+                    "lines" to invoice.lines.map { l ->
+                        mapOf(
+                            "line_id" to l.lineId,
+                            "product_id" to l.productId,
+                            "product_name" to l.productName,
+                            "qty" to l.qty.toPlainString(),
+                            "unit_price" to l.unitPrice.toPlainString(),
+                            "vat_rate" to l.vatRate.toPlainString(),
+                            "vat_amount" to l.vatAmount.toPlainString(),
+                            "line_total" to l.lineTotal.toPlainString()
+                        )
+                    }
+                )
+                val jsonPayload = moshi.adapter(Map::class.java).toJson(payloadMap)
+                roomDb.syncQueueDao().enqueue(
+                    com.example.kanak.data.local.SyncQueueEntity(
+                        action = "create_invoice",
+                        payloadJson = jsonPayload
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("KanakRepository", "Offline invoice cache error: ${e.message}")
+        }
+        refreshPendingSyncCount()
 
         // Sync with Google Sheets backend
         syncToGatewayIfConfigured("create_invoice", mapOf(
@@ -680,6 +1071,9 @@ class KanakRepository(private val context: Context) {
             "total" to invoice.total.toPlainString(),
             "status" to invoice.status,
             "created_by" to invoice.createdBy,
+            "payment_type" to invoice.paymentType,
+            "payment_status" to invoice.paymentStatus,
+            "amount_paid" to invoice.amountPaid.toPlainString(),
             "lines" to invoice.lines.map { l ->
                 mapOf(
                     "line_id" to l.lineId,
@@ -703,6 +1097,82 @@ class KanakRepository(private val context: Context) {
         }
 
         return Result.success(invoice)
+    }
+
+    /**
+     * Records payment received against an invoice (e.g. paying off a customer credit bill).
+     * Atomically updates amountPaid and paymentStatus (PAID or PARTIALLY_PAID) across Room,
+     * Firestore, and Google Sheets gateway.
+     */
+    suspend fun recordInvoicePayment(
+        invoiceId: String,
+        amountToPay: BigDecimal,
+        recordedBy: String
+    ): Result<Invoice> = mutationMutex.withLock {
+        val invoice = _invoices.value.find { it.invoiceId == invoiceId }
+            ?: return Result.failure(NoSuchElementException("Invoice not found"))
+
+        if (invoice.isVoid) {
+            return Result.failure(IllegalStateException("Cannot record payment for a voided invoice"))
+        }
+
+        if (amountToPay <= BigDecimal.ZERO) {
+            return Result.failure(IllegalArgumentException("Payment amount must be greater than zero"))
+        }
+
+        val remainingBalance = invoice.balanceDue
+        if (remainingBalance <= BigDecimal.ZERO) {
+            return Result.failure(IllegalStateException("Invoice is already fully paid"))
+        }
+
+        val scaledPayment = BahrainFinancials.scaleAmount(amountToPay)
+        val newAmountPaid = invoice.amountPaid.add(scaledPayment).min(invoice.total)
+        val newStatus = if (newAmountPaid >= invoice.total) {
+            Invoice.PAYMENT_STATUS_PAID
+        } else {
+            Invoice.PAYMENT_STATUS_PARTIAL
+        }
+
+        val updatedInvoice = invoice.copy(
+            paymentStatus = newStatus,
+            amountPaid = newAmountPaid
+        )
+
+        _invoices.value = _invoices.value.map { if (it.invoiceId == invoiceId) updatedInvoice else it }
+
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.invoiceDao().updatePayment(invoiceId, newStatus, newAmountPaid)
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
+
+        // Firebase Firestore update
+        scope.launch {
+            try {
+                firebaseManager.backupInvoiceToFirestore(updatedInvoice, recordedBy)
+            } catch (_: Exception) {}
+        }
+
+        // Google Sheets gateway sync
+        syncToGatewayIfConfigured("record_payment", mapOf(
+            "invoice_id" to invoiceId,
+            "amount_paid" to newAmountPaid.toPlainString(),
+            "payment_status" to newStatus,
+            "recorded_by" to recordedBy,
+            "payment_date" to getBahrainTimestampString()
+        ))
+
+        return Result.success(updatedInvoice)
+    }
+
+    /**
+     * Computes the total outstanding credit balance for a given customer across all active bills.
+     */
+    fun getCustomerOutstandingCredit(customerId: String): BigDecimal {
+        return _invoices.value
+            .filter { it.customerId == customerId && !it.isVoid }
+            .fold(BigDecimal.ZERO) { acc, inv -> acc.add(inv.balanceDue) }
     }
 
     /**
@@ -734,6 +1204,14 @@ class KanakRepository(private val context: Context) {
 
         _products.value = updatedProducts
         _invoices.value = _invoices.value.map { if (it.invoiceId == invoiceId) voided else it }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.invoiceDao().updateVoidStatus(invoiceId, Invoice.STATUS_VOID, voided.voidedAt ?: getCurrentTimestampUtc())
+                for (restored in updatedProducts) {
+                    roomDb.productDao().updateStock(restored.productId, restored.stockQty)
+                }
+            }
+        } catch (_: Exception) {}
         recalculateDashboard()
 
         syncToGatewayIfConfigured("void_invoice", mapOf(
@@ -789,6 +1267,13 @@ class KanakRepository(private val context: Context) {
         val updatedProduct = product.copy(stockQty = resultingStock)
         _stockAdjustments.value = listOf(adjustment) + _stockAdjustments.value
         _products.value = _products.value.map { if (it.productId == productId) updatedProduct else it }
+        try {
+            withContext(Dispatchers.IO) {
+                roomDb.stockAdjustmentDao().insert(com.example.kanak.data.local.StockAdjustmentEntity.fromDomain(adjustment))
+                roomDb.productDao().updateStock(productId, updatedProduct.stockQty)
+            }
+        } catch (_: Exception) {}
+        saveLocalDatabase()
 
         syncToGatewayIfConfigured("adjust_stock", mapOf(
             "adjustment_id" to adjustment.adjustmentId,
@@ -816,10 +1301,12 @@ class KanakRepository(private val context: Context) {
         }
 
         var todayTotal = BigDecimal.ZERO
+        var todayVat = BigDecimal.ZERO
         val productSalesMap = mutableMapOf<String, Pair<BigDecimal, BigDecimal>>() // productId -> (qty, revenue)
 
         for (inv in postedToday) {
             todayTotal = todayTotal.add(inv.total)
+            todayVat = todayVat.add(inv.vatTotal)
             for (line in inv.lines) {
                 val existing = productSalesMap[line.productId] ?: Pair(BigDecimal.ZERO, BigDecimal.ZERO)
                 val newQty = existing.first.add(line.qty)
@@ -841,15 +1328,54 @@ class KanakRepository(private val context: Context) {
             .sortedWith(compareByDescending<TopProductItem> { it.qtySold }.thenByDescending { it.totalRevenue })
             .take(5)
 
+        // Fleet Van Performances
+        val vanPerfList = _vans.value.map { van ->
+            val vanInvoices = postedToday.filter { it.vanId == van.vanId }
+            val vanTotal = vanInvoices.fold(BigDecimal.ZERO) { acc, inv -> acc.add(inv.total) }
+            VanPerformanceItem(
+                vanId = van.vanId,
+                vanCode = van.vanCode,
+                vanName = van.vanName,
+                salespersonName = van.assignedSalespersonName ?: "Unassigned",
+                todaySales = BahrainFinancials.scaleAmount(vanTotal),
+                todayInvoicesCount = vanInvoices.size
+            )
+        }
+
         _dashboardSummary.value = DashboardSummary(
             todaySalesTotal = BahrainFinancials.scaleAmount(todayTotal),
+            todayVatTotal = BahrainFinancials.scaleAmount(todayVat),
             todayInvoiceCount = postedToday.size,
-            topSellingProducts = topList
+            activeVansCount = _vans.value.count { it.status == Van.STATUS_ACTIVE },
+            activeSalespeopleCount = _teamMemberships.value.count { it.status == "ACTIVE" && it.role == User.ROLE_SALESPERSON },
+            topSellingProducts = topList,
+            vanPerformances = vanPerfList
         )
         saveLocalDatabase()
+        saveMultiTenantState()
     }
 
     private fun saveLocalDatabase() {
+        // Persist to Room Database for robust local offline caching
+        scope.launch(Dispatchers.IO) {
+            try {
+                val db = roomDb
+                db.productDao().insertAll(_products.value.map { com.example.kanak.data.local.ProductEntity.fromDomain(it) })
+                db.customerDao().insertAll(_customers.value.map { com.example.kanak.data.local.CustomerEntity.fromDomain(it) })
+                db.supplierDao().insertAll(_suppliers.value.map { com.example.kanak.data.local.SupplierEntity.fromDomain(it) })
+                db.purchaseDao().insertAll(_purchases.value.map { com.example.kanak.data.local.PurchaseEntity.fromDomain(it) })
+                _invoices.value.forEach { inv ->
+                    db.invoiceDao().insertFullInvoice(
+                        com.example.kanak.data.local.InvoiceEntity.fromDomain(inv),
+                        inv.lines.map { com.example.kanak.data.local.InvoiceLineEntity.fromDomain(it) }
+                    )
+                }
+                db.stockAdjustmentDao().insertAll(_stockAdjustments.value.map { com.example.kanak.data.local.StockAdjustmentEntity.fromDomain(it) })
+            } catch (e: Exception) {
+                android.util.Log.w("KanakRepository", "Room save error: ${e.message}")
+            }
+        }
+
         try {
             val map = mapOf(
                 "products" to _products.value.map { p ->
@@ -905,6 +1431,9 @@ class KanakRepository(private val context: Context) {
                         "status" to inv.status,
                         "created_by" to inv.createdBy,
                         "voided_at" to (inv.voidedAt ?: ""),
+                        "payment_type" to inv.paymentType,
+                        "payment_status" to inv.paymentStatus,
+                        "amount_paid" to inv.amountPaid.toPlainString(),
                         "lines" to inv.lines.map { l ->
                             mapOf(
                                 "line_id" to l.lineId,
@@ -938,6 +1467,28 @@ class KanakRepository(private val context: Context) {
     }
 
     private fun loadLocalDatabase(): Boolean {
+        // 1. First attempt to load from Room database
+        try {
+            val db = roomDb
+            val p = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.productDao().getAllProducts() }
+            val c = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.customerDao().getAllCustomers() }
+            val s = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.supplierDao().getAllSuppliers() }
+            val pu = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.purchaseDao().getAllPurchases() }
+            val inv = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.invoiceDao().getAllInvoicesWithLines() }
+            val sa = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.stockAdjustmentDao().getAllAdjustments() }
+
+            if (p.isNotEmpty() || c.isNotEmpty() || inv.isNotEmpty()) {
+                _products.value = p.map { it.toDomain() }
+                _customers.value = c.map { it.toDomain() }
+                _suppliers.value = s.map { it.toDomain() }
+                _purchases.value = pu.map { it.toDomain() }
+                _invoices.value = inv.map { it.toDomain() }
+                _stockAdjustments.value = sa.map { it.toDomain() }
+                return true
+            }
+        } catch (_: Exception) {}
+
+        // 2. Fallback to existing JSON if present (and migrate to Room)
         val json = prefs.getString("local_database_json", null) ?: return false
         return try {
             @Suppress("UNCHECKED_CAST")
@@ -999,20 +1550,32 @@ class KanakRepository(private val context: Context) {
                             lineTotal = BahrainFinancials.parseBhd(l["line_total"]?.toString() ?: "0")
                         )
                     }
-                    Invoice(
-                        invoiceId = invId,
-                        invoiceNumber = map["invoice_number"]?.toString() ?: "INV",
-                        customerId = map["customer_id"]?.toString() ?: "",
-                        customerName = map["customer_name"]?.toString() ?: "",
-                        date = map["date"]?.toString() ?: "",
-                        subtotal = BahrainFinancials.parseBhd(map["subtotal"]?.toString() ?: "0"),
-                        vatTotal = BahrainFinancials.parseBhd(map["vat_total"]?.toString() ?: "0"),
-                        total = BahrainFinancials.parseBhd(map["total"]?.toString() ?: "0"),
-                        status = map["status"]?.toString() ?: Invoice.STATUS_POSTED,
-                        createdBy = map["created_by"]?.toString() ?: "",
-                        voidedAt = map["voided_at"]?.toString()?.takeIf { it.isNotBlank() },
-                        lines = lines
-                    )
+                    val totalBhd = BahrainFinancials.parseBhd(map["total"]?.toString() ?: "0")
+                    val pType = map["payment_type"]?.toString() ?: Invoice.PAYMENT_CASH
+                    val pStatus = map["payment_status"]?.toString() ?: if (pType == Invoice.PAYMENT_CREDIT) Invoice.PAYMENT_STATUS_UNPAID else Invoice.PAYMENT_STATUS_PAID
+                    val amtPaid = if (map.containsKey("amount_paid")) {
+                        BahrainFinancials.parseBhd(map["amount_paid"]?.toString() ?: "0")
+                    } else {
+                        if (pStatus == Invoice.PAYMENT_STATUS_PAID) totalBhd else BigDecimal.ZERO
+                    }
+
+                        Invoice(
+                            invoiceId = invId,
+                            invoiceNumber = map["invoice_number"]?.toString() ?: "INV",
+                            customerId = map["customer_id"]?.toString() ?: "",
+                            customerName = map["customer_name"]?.toString() ?: "",
+                            date = map["date"]?.toString() ?: "",
+                            subtotal = BahrainFinancials.parseBhd(map["subtotal"]?.toString() ?: "0"),
+                            vatTotal = BahrainFinancials.parseBhd(map["vat_total"]?.toString() ?: "0"),
+                            total = totalBhd,
+                            status = map["status"]?.toString() ?: Invoice.STATUS_POSTED,
+                            createdBy = map["created_by"]?.toString() ?: "",
+                            voidedAt = map["voided_at"]?.toString()?.takeIf { it.isNotBlank() },
+                            lines = lines,
+                            paymentType = pType,
+                            paymentStatus = pStatus,
+                            amountPaid = amtPaid
+                        )
                 } catch (e: Exception) { null }
             }
 
@@ -1026,10 +1589,19 @@ class KanakRepository(private val context: Context) {
         }
     }
 
-    private fun generateNextInvoiceNumber(): String {
-        val count = _invoices.value.size + 1
-        val year = Calendar.getInstance(TimeZone.getTimeZone("Asia/Bahrain")).get(Calendar.YEAR)
-        return String.format(Locale.US, "INV-%d-%04d", year, count)
+    fun generateNextInvoiceNumber(vanCode: String = ""): String {
+        val cleanVan = if (vanCode.isNotBlank()) {
+            vanCode.replace(" ", "").replace("-", "").uppercase()
+        } else {
+            "HQ"
+        }
+        val dateCompact = SimpleDateFormat("yyyyMMdd", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Bahrain")
+        }.format(Date())
+        val key = "invoice_seq_${cleanVan}_$dateCompact"
+        val nextSeq = prefs.getInt(key, 0) + 1
+        prefs.edit().putInt(key, nextSeq).apply()
+        return String.format(Locale.US, "INV-%s-%s-%04d", cleanVan, dateCompact, nextSeq)
     }
 
     private fun getCurrentTimestampUtc(): String {
@@ -1218,100 +1790,1094 @@ class KanakRepository(private val context: Context) {
     }
 
     /**
-     * Seeds initial Bahrain FMCG wholesale inventory data with actual products,
-     * realistic prices in BHD, and stock in van for instant ready-to-use testing.
+     * Background Synchronization: Queries completed sales records (status == POSTED) from Firestore
+     * and pushes them to the authoritative Google Sheets document via the Google Apps Script Gateway.
+     * Marks synced documents in Firestore upon confirmation.
      */
-    private fun seedInitialFmcgData() {
-        val p1 = Product(
-            productId = "prod_001",
-            barcode = "6281007000018",
-            name = "Almarai Full Cream Fresh Milk 2L",
-            costPrice = BigDecimal("0.850"),
-            sellingPrice = BigDecimal("1.100"),
-            vatRate = BigDecimal("0.10"),
-            vatAmount = BigDecimal("0.100"),
-            photoUrl = BingThumbnailUrlBuilder.buildDefaultProductImageUrl("6281007000018", "Almarai Full Cream Fresh Milk 2L"),
-            stockQty = BigDecimal("45.000")
-        )
-        val p2 = Product(
-            productId = "prod_002",
-            barcode = "6291003001234",
-            name = "Tiffany Marie Biscuits 12x100g",
-            costPrice = BigDecimal("0.600"),
-            sellingPrice = BigDecimal("0.800"),
-            vatRate = BigDecimal("0.10"),
-            vatAmount = BigDecimal("0.073"),
-            photoUrl = BingThumbnailUrlBuilder.buildDefaultProductImageUrl("6291003001234", "Tiffany Marie Biscuits 12x100g"),
-            stockQty = BigDecimal("60.000")
-        )
-        val p3 = Product(
-            productId = "prod_003",
-            barcode = "5740900000456",
-            name = "Lurpak Salted Butter 200g",
-            costPrice = BigDecimal("0.950"),
-            sellingPrice = BigDecimal("1.250"),
-            vatRate = BigDecimal("0.10"),
-            vatAmount = BigDecimal("0.114"),
-            photoUrl = BingThumbnailUrlBuilder.buildDefaultProductImageUrl("5740900000456", "Lurpak Salted Butter 200g"),
-            stockQty = BigDecimal("30.000")
-        )
-        val p4 = Product(
-            productId = "prod_004",
-            barcode = "6281017000789",
-            name = "Rani Float Mango Juice 240ml Can x24",
-            costPrice = BigDecimal("3.200"),
-            sellingPrice = BigDecimal("4.200"),
-            vatRate = BigDecimal("0.10"),
-            vatAmount = BigDecimal("0.382"),
-            photoUrl = BingThumbnailUrlBuilder.buildDefaultProductImageUrl("6281017000789", "Rani Float Mango Juice 240ml Can x24"),
-            stockQty = BigDecimal("20.000")
-        )
-        val p5 = Product(
-            productId = "prod_005",
-            barcode = "6084001001122",
-            name = "Bahrain Water 500ml Pack of 24",
-            costPrice = BigDecimal("0.800"),
-            sellingPrice = BigDecimal("1.100"),
-            vatRate = BigDecimal("0.00"), // Zero-rated basic water bottle pack
-            vatAmount = BigDecimal("0.000"),
-            photoUrl = BingThumbnailUrlBuilder.buildDefaultProductImageUrl("6084001001122", "Bahrain Water 500ml Pack of 24"),
-            stockQty = BigDecimal("50.000")
-        )
-        _products.value = listOf(p1, p2, p3, p4, p5)
+    suspend fun pushFirestoreSalesToGoogleSheets(): Result<Int> = mutationMutex.withLock {
+        val gatewayUrl = getGatewayUrl()
+        if (gatewayUrl.isNullOrBlank()) {
+            return Result.failure(IllegalStateException("Google Sheets Gateway URL is not configured."))
+        }
 
-        val c1 = Customer(
-            customerId = "cust_001",
-            businessName = "Al-Hilal Cold Store",
-            contact = "Mohammed Al-Saeed",
-            address = "Shop 12, Gudaibiya, Manama",
-            phone = "+973 3912 3456"
-        )
-        val c2 = Customer(
-            customerId = "cust_002",
-            businessName = "Bab Al-Bahrain Supermarket",
-            contact = "Salman Khan",
-            address = "Govt Ave, Manama Souq",
-            phone = "+973 3876 5432"
-        )
-        val c3 = Customer(
-            customerId = "cust_003",
-            businessName = "Riffa Modern Grocery",
-            contact = "Abdulla Isa",
-            address = "Road 14, East Riffa",
-            phone = "+973 3654 9870"
-        )
-        _customers.value = listOf(c1, c2, c3)
+        try {
+            val pendingSalesResult = firebaseManager.getCompletedSalesForSheetsSync()
+            val salesToPush = pendingSalesResult.getOrElse { emptyList() }
+            if (salesToPush.isEmpty()) {
+                return Result.success(0)
+            }
 
-        val s1 = Supplier(
-            supplierId = "sup_001",
-            name = "Bahrain Food Distribution WLL",
-            contact = "Ali Jassim (+973 1722 0000)"
+            var pushedCount = 0
+            val token = currentAuthToken ?: "device_bearer_token"
+
+            for (invoice in salesToPush) {
+                val payload = mapOf(
+                    "invoice_id" to invoice.invoiceId,
+                    "invoice_number" to invoice.invoiceNumber,
+                    "customer_id" to invoice.customerId,
+                    "customer_name" to invoice.customerName,
+                    "date" to invoice.date,
+                    "subtotal" to invoice.subtotal.toPlainString(),
+                    "vat_total" to invoice.vatTotal.toPlainString(),
+                    "total" to invoice.total.toPlainString(),
+                    "status" to invoice.status,
+                    "created_by" to invoice.createdBy,
+                    "payment_type" to invoice.paymentType,
+                    "payment_status" to invoice.paymentStatus,
+                    "amount_paid" to invoice.amountPaid.toPlainString(),
+                    "lines" to invoice.lines.map { l ->
+                        mapOf(
+                            "line_id" to l.lineId,
+                            "product_id" to l.productId,
+                            "product_name" to l.productName,
+                            "qty" to l.qty.toPlainString(),
+                            "unit_price" to l.unitPrice.toPlainString(),
+                            "vat_rate" to l.vatRate.toPlainString(),
+                            "vat_amount" to l.vatAmount.toPlainString(),
+                            "line_total" to l.lineTotal.toPlainString()
+                        )
+                    }
+                )
+
+                val req = GatewayRequest(action = "create_invoice", idToken = token, payload = payload)
+                val resp = apiService.executeGatewayAction(gatewayUrl, req)
+                if (resp.isSuccessful && resp.body()?.success == true) {
+                    firebaseManager.markSaleSyncedToSheets(invoice.invoiceId)
+                    try {
+                        roomDb.invoiceDao().updateSyncStatus(invoice.invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED)
+                    } catch (_: Exception) {}
+                    pushedCount++
+                }
+            }
+
+            return Result.success(pushedCount)
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+    }
+
+    /**
+     * Flushes offline mutations recorded in the Room sync queue to the Google Sheets gateway.
+     */
+    suspend fun flushPendingRoomSyncQueue(): Result<Int> {
+        val gatewayUrl = getGatewayUrl() ?: return Result.success(0)
+        if (gatewayUrl.isBlank()) return Result.success(0)
+
+        return try {
+            val pending = roomDb.syncQueueDao().getPendingItems()
+            var count = 0
+            val token = currentAuthToken ?: "device_bearer_token"
+            for (item in pending) {
+                try {
+                    @Suppress("UNCHECKED_CAST")
+                    val payload = moshi.adapter(Map::class.java).fromJson(item.payloadJson) as? Map<String, Any?> ?: emptyMap()
+                    val req = GatewayRequest(action = item.action, idToken = token, payload = payload)
+                    val resp = apiService.executeGatewayAction(gatewayUrl, req)
+                    if (resp.isSuccessful && resp.body()?.success == true) {
+                        roomDb.syncQueueDao().deleteById(item.queueId)
+                        count++
+                    } else {
+                        roomDb.syncQueueDao().markFailed(item.queueId, resp.body()?.error ?: "HTTP ${resp.code()}")
+                    }
+                } catch (e: Exception) {
+                    roomDb.syncQueueDao().markFailed(item.queueId, e.message)
+                }
+            }
+            Result.success(count)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Triggers active bi-directional synchronization of all pending Room invoices and queued actions.
+     * Updates live connection/sync state (ONLINE, PENDING, SYNCING, CONFLICT).
+     */
+    suspend fun syncAllPendingNow(): Result<Int> = mutationMutex.withLock {
+        if (!_isOnline.value) {
+            updateSyncState()
+            return Result.failure(IllegalStateException("Device is offline. Changes are stored locally in Room database."))
+        }
+
+        _isSyncing.value = true
+        updateSyncState()
+        try {
+            var syncedCount = 0
+
+            // 1. Back up pending local Room invoices to Firestore
+            val pendingEntities = roomDb.invoiceDao().getInvoicesBySyncStatus(com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_PENDING)
+            for (pEntity in pendingEntities) {
+                val fullInv = roomDb.invoiceDao().getInvoiceWithLinesById(pEntity.invoiceId)?.toDomain()
+                if (fullInv != null) {
+                    val fbResult = firebaseManager.backupInvoiceToFirestore(fullInv, fullInv.createdBy)
+                    if (fbResult.isSuccess) {
+                        roomDb.invoiceDao().updateSyncStatus(fullInv.invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED)
+                        syncedCount++
+                    } else {
+                        android.util.Log.w("KanakRepository", "Firestore backup retry: ${fbResult.exceptionOrNull()?.message}")
+                    }
+                }
+            }
+
+            // 2. Push Firestore sales to authoritative Google Sheets
+            val sheetsResult = pushFirestoreSalesToGoogleSheets()
+            syncedCount += sheetsResult.getOrNull() ?: 0
+
+            // 3. Flush any pending Room sync queue mutations
+            val queueResult = flushPendingRoomSyncQueue()
+            syncedCount += queueResult.getOrNull() ?: 0
+
+            refreshPendingSyncCount()
+            _conflictCount.value = 0
+            _conflictMessage.value = null
+            _lastSyncError.value = null
+            updateSyncState()
+            Result.success(syncedCount)
+        } catch (e: Exception) {
+            _lastSyncError.value = e.message
+            updateSyncState()
+            Result.failure(e)
+        } finally {
+            _isSyncing.value = false
+            updateSyncState()
+        }
+    }
+
+    /**
+     * Resets the entire local persistent database to empty production state.
+     * Removes any legacy mock data and writes pristine empty collections.
+     */
+    fun clearAllData() {
+        _products.value = emptyList()
+        _customers.value = emptyList()
+        _suppliers.value = emptyList()
+        _purchases.value = emptyList()
+        _invoices.value = emptyList()
+        _stockAdjustments.value = emptyList()
+        prefs.edit().remove("local_database_json").apply()
+        runBlocking(Dispatchers.IO) {
+            try {
+                roomDb.clearAllTables()
+            } catch (_: Exception) {}
+        }
+        recalculateDashboard()
+    }
+
+    fun resetToEmptyProductionDatabase() {
+        clearAllData()
+    }
+
+    // -------------------------------------------------------------
+    // MULTI-TENANT, MULTI-VAN & FLEET IMPLEMENTATION (SECTION 4, 5, 7, 12, 16)
+    // -------------------------------------------------------------
+
+    fun getBusinessId(): String = _currentBusiness.value.businessId
+
+    fun getBahrainDateString(): String {
+        val df = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Bahrain")
+        }
+        return df.format(Date())
+    }
+
+    private fun loadCurrentBusiness(): Business {
+        val json = prefs.getString("current_business_json", null)
+        if (json != null) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val m = moshi.adapter(Map::class.java).fromJson(json) as? Map<String, Any?>
+                if (m != null) {
+                    return Business(
+                        businessId = m["business_id"]?.toString() ?: "biz_001",
+                        name = m["name"]?.toString() ?: getBusinessName(),
+                        crNumber = m["cr_number"]?.toString() ?: "123456-1",
+                        vatNumber = m["vat_number"]?.toString() ?: getVatNumber(),
+                        ownerEmail = m["owner_email"]?.toString() ?: "zanabalmuhamed@gmail.com",
+                        ownerName = m["owner_name"]?.toString() ?: "Zanabal Mohamed",
+                        phone = m["phone"]?.toString() ?: "+973 3305 0666",
+                        address = m["address"]?.toString() ?: getBusinessAddress(),
+                        status = m["status"]?.toString() ?: Business.STATUS_ACTIVE,
+                        createdAt = m["created_at"]?.toString() ?: "2026-11-01T00:00:00Z"
+                    )
+                }
+            } catch (_: Exception) {}
+        }
+        return Business(
+            businessId = "biz_001",
+            name = getBusinessName(),
+            crNumber = "123456-1",
+            vatNumber = getVatNumber(),
+            ownerEmail = "zanabalmuhamed@gmail.com",
+            ownerName = "Zanabal Mohamed",
+            phone = "+973 3305 0666",
+            address = getBusinessAddress(),
+            status = Business.STATUS_ACTIVE
         )
-        val s2 = Supplier(
-            supplierId = "sup_002",
-            name = "Gulf Dairy Products Co.",
-            contact = "Kareem Hassan (+973 1788 1122)"
+    }
+
+    private fun loadVans(): List<Van> {
+        val json = prefs.getString("fleet_vans_json", null)
+        if (json != null) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val list = moshi.adapter(List::class.java).fromJson(json) as? List<Map<String, Any?>>
+                if (!list.isNullOrEmpty()) {
+                    return list.map { m ->
+                        Van(
+                            vanId = m["van_id"]?.toString() ?: UUID.randomUUID().toString(),
+                            businessId = m["business_id"]?.toString() ?: "biz_001",
+                            vanCode = m["van_code"]?.toString() ?: "VAN-001",
+                            vanName = m["van_name"]?.toString() ?: "Van",
+                            registrationNo = m["reg_no"]?.toString() ?: "",
+                            assignedSalespersonId = m["salesperson_id"]?.toString()?.takeIf { it.isNotBlank() },
+                            assignedSalespersonName = m["salesperson_name"]?.toString()?.takeIf { it.isNotBlank() },
+                            status = m["status"]?.toString() ?: Van.STATUS_ACTIVE,
+                            notes = m["notes"]?.toString() ?: ""
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return emptyList()
+    }
+
+    private fun loadVanStocks(): Map<String, Map<String, BigDecimal>> {
+        val json = prefs.getString("van_stocks_json", null)
+        if (json != null) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val root = moshi.adapter(Map::class.java).fromJson(json) as? Map<String, Map<String, String>>
+                if (root != null) {
+                    val result = mutableMapOf<String, Map<String, BigDecimal>>()
+                    for ((vanId, prodMap) in root) {
+                        val subMap = mutableMapOf<String, BigDecimal>()
+                        for ((prodId, qtyStr) in prodMap) {
+                            subMap[prodId] = BahrainFinancials.parseBhd(qtyStr)
+                        }
+                        result[vanId] = subMap
+                    }
+                    return result
+                }
+            } catch (_: Exception) {}
+        }
+        return emptyMap()
+    }
+
+    private fun loadMemberships(): List<EmployeeMembership> {
+        val json = prefs.getString("team_memberships_json", null)
+        if (json != null) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val list = moshi.adapter(List::class.java).fromJson(json) as? List<Map<String, Any?>>
+                if (!list.isNullOrEmpty()) {
+                    return list.map { m ->
+                        val permsList = (m["permissions"] as? List<*>)?.mapNotNull { it?.toString() }?.toSet()
+                            ?: KanakPermissions.DEFAULT_SALESPERSON_PERMISSIONS
+                        EmployeeMembership(
+                            membershipId = m["membership_id"]?.toString() ?: UUID.randomUUID().toString(),
+                            businessId = m["business_id"]?.toString() ?: "biz_001",
+                            businessName = m["business_name"]?.toString() ?: getBusinessName(),
+                            userId = m["user_id"]?.toString() ?: UUID.randomUUID().toString(),
+                            email = m["email"]?.toString() ?: "",
+                            displayName = m["display_name"]?.toString() ?: "Employee",
+                            role = m["role"]?.toString() ?: User.ROLE_SALESPERSON,
+                            assignedVanId = m["assigned_van_id"]?.toString()?.takeIf { it.isNotBlank() },
+                            assignedVanCode = m["assigned_van_code"]?.toString()?.takeIf { it.isNotBlank() },
+                            permissions = permsList,
+                            status = m["status"]?.toString() ?: "ACTIVE",
+                            joinedAt = m["joined_at"]?.toString() ?: "2026-11-01"
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return emptyList()
+    }
+
+    private fun loadInvitations(): List<EmployeeInvitation> {
+        val json = prefs.getString("pending_invitations_json", null)
+        if (json != null) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val list = moshi.adapter(List::class.java).fromJson(json) as? List<Map<String, Any?>>
+                if (!list.isNullOrEmpty()) {
+                    return list.map { m ->
+                        val permsList = (m["permissions"] as? List<*>)?.mapNotNull { it?.toString() }?.toSet()
+                            ?: KanakPermissions.DEFAULT_SALESPERSON_PERMISSIONS
+                        EmployeeInvitation(
+                            invitationId = m["invitation_id"]?.toString() ?: UUID.randomUUID().toString(),
+                            businessId = m["business_id"]?.toString() ?: "biz_001",
+                            businessName = m["business_name"]?.toString() ?: getBusinessName(),
+                            recipientEmail = m["recipient_email"]?.toString() ?: "",
+                            role = m["role"]?.toString() ?: User.ROLE_SALESPERSON,
+                            assignedVanId = m["assigned_van_id"]?.toString()?.takeIf { it.isNotBlank() },
+                            assignedVanCode = m["assigned_van_code"]?.toString()?.takeIf { it.isNotBlank() },
+                            permissions = permsList,
+                            inviteCode = m["invite_code"]?.toString() ?: "KNK-0000",
+                            status = m["status"]?.toString() ?: EmployeeInvitation.STATUS_PENDING,
+                            createdAt = m["created_at"]?.toString() ?: "2026-11-03",
+                            expiresAt = m["expires_at"]?.toString() ?: "2026-11-10"
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return emptyList()
+    }
+
+    private fun loadStockTransfers(): List<StockTransfer> {
+        val json = prefs.getString("stock_transfers_json", null)
+        if (json != null) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val list = moshi.adapter(List::class.java).fromJson(json) as? List<Map<String, Any?>>
+                if (!list.isNullOrEmpty()) {
+                    return list.map { m ->
+                        StockTransfer(
+                            transferId = m["transfer_id"]?.toString() ?: UUID.randomUUID().toString(),
+                            businessId = m["business_id"]?.toString() ?: "biz_001",
+                            sourceType = m["source_type"]?.toString() ?: "WAREHOUSE",
+                            sourceId = m["source_id"]?.toString() ?: "WAREHOUSE",
+                            sourceName = m["source_name"]?.toString() ?: "Central Warehouse",
+                            destinationVanId = m["dest_van_id"]?.toString() ?: "",
+                            destinationVanName = m["dest_van_name"]?.toString() ?: "Van",
+                            productId = m["product_id"]?.toString() ?: "",
+                            productName = m["product_name"]?.toString() ?: "",
+                            qty = BahrainFinancials.parseBhd(m["qty"]?.toString() ?: "0"),
+                            transferredBy = m["transferred_by"]?.toString() ?: "",
+                            timestamp = m["timestamp"]?.toString() ?: "",
+                            notes = m["notes"]?.toString() ?: ""
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return emptyList()
+    }
+
+    private fun loadAuditRecords(): List<AuditRecord> {
+        val json = prefs.getString("audit_records_json", null)
+        if (json != null) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val list = moshi.adapter(List::class.java).fromJson(json) as? List<Map<String, Any?>>
+                if (!list.isNullOrEmpty()) {
+                    return list.map { m ->
+                        AuditRecord(
+                            auditId = m["audit_id"]?.toString() ?: UUID.randomUUID().toString(),
+                            businessId = m["business_id"]?.toString() ?: "biz_001",
+                            actorUserId = m["actor_user_id"]?.toString() ?: "",
+                            actorEmail = m["actor_email"]?.toString() ?: "",
+                            action = m["action"]?.toString() ?: "",
+                            targetType = m["target_type"]?.toString() ?: "",
+                            targetId = m["target_id"]?.toString() ?: "",
+                            details = m["details"]?.toString() ?: "",
+                            timestamp = m["timestamp"]?.toString() ?: ""
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return emptyList()
+    }
+
+    private fun saveMultiTenantState() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                // Vans
+                val vansList = _vans.value.map { v ->
+                    mapOf(
+                        "van_id" to v.vanId,
+                        "business_id" to v.businessId,
+                        "van_code" to v.vanCode,
+                        "van_name" to v.vanName,
+                        "reg_no" to v.registrationNo,
+                        "salesperson_id" to (v.assignedSalespersonId ?: ""),
+                        "salesperson_name" to (v.assignedSalespersonName ?: ""),
+                        "status" to v.status,
+                        "notes" to v.notes
+                    )
+                }
+                prefs.edit().putString("fleet_vans_json", moshi.adapter(List::class.java).toJson(vansList)).apply()
+
+                // Van Stocks
+                val stockMap = mutableMapOf<String, Map<String, String>>()
+                for ((vId, pMap) in _vanStocks.value) {
+                    val sub = mutableMapOf<String, String>()
+                    for ((pId, qty) in pMap) {
+                        sub[pId] = qty.toPlainString()
+                    }
+                    stockMap[vId] = sub
+                }
+                prefs.edit().putString("van_stocks_json", moshi.adapter(Map::class.java).toJson(stockMap)).apply()
+
+                // Memberships
+                val memList = _teamMemberships.value.map { m ->
+                    mapOf(
+                        "membership_id" to m.membershipId,
+                        "business_id" to m.businessId,
+                        "business_name" to m.businessName,
+                        "user_id" to m.userId,
+                        "email" to m.email,
+                        "display_name" to m.displayName,
+                        "role" to m.role,
+                        "assigned_van_id" to (m.assignedVanId ?: ""),
+                        "assigned_van_code" to (m.assignedVanCode ?: ""),
+                        "permissions" to m.permissions.toList(),
+                        "status" to m.status,
+                        "joined_at" to m.joinedAt
+                    )
+                }
+                prefs.edit().putString("team_memberships_json", moshi.adapter(List::class.java).toJson(memList)).apply()
+
+                // Invitations
+                val invList = _pendingInvitations.value.map { inv ->
+                    mapOf(
+                        "invitation_id" to inv.invitationId,
+                        "business_id" to inv.businessId,
+                        "business_name" to inv.businessName,
+                        "recipient_email" to inv.recipientEmail,
+                        "role" to inv.role,
+                        "assigned_van_id" to (inv.assignedVanId ?: ""),
+                        "assigned_van_code" to (inv.assignedVanCode ?: ""),
+                        "permissions" to inv.permissions.toList(),
+                        "invite_code" to inv.inviteCode,
+                        "status" to inv.status,
+                        "created_at" to inv.createdAt,
+                        "expires_at" to inv.expiresAt
+                    )
+                }
+                prefs.edit().putString("pending_invitations_json", moshi.adapter(List::class.java).toJson(invList)).apply()
+
+                // Stock Transfers
+                val trList = _stockTransfers.value.map { tr ->
+                    mapOf(
+                        "transfer_id" to tr.transferId,
+                        "business_id" to tr.businessId,
+                        "source_type" to tr.sourceType,
+                        "source_id" to tr.sourceId,
+                        "source_name" to tr.sourceName,
+                        "dest_van_id" to tr.destinationVanId,
+                        "dest_van_name" to tr.destinationVanName,
+                        "product_id" to tr.productId,
+                        "product_name" to tr.productName,
+                        "qty" to tr.qty.toPlainString(),
+                        "transferred_by" to tr.transferredBy,
+                        "timestamp" to tr.timestamp,
+                        "notes" to tr.notes
+                    )
+                }
+                prefs.edit().putString("stock_transfers_json", moshi.adapter(List::class.java).toJson(trList)).apply()
+
+                // Audit records
+                val audList = _auditRecords.value.take(200).map { a ->
+                    mapOf(
+                        "audit_id" to a.auditId,
+                        "business_id" to a.businessId,
+                        "actor_user_id" to a.actorUserId,
+                        "actor_email" to a.actorEmail,
+                        "action" to a.action,
+                        "target_type" to a.targetType,
+                        "target_id" to a.targetId,
+                        "details" to a.details,
+                        "timestamp" to a.timestamp
+                    )
+                }
+                prefs.edit().putString("audit_records_json", moshi.adapter(List::class.java).toJson(audList)).apply()
+            } catch (e: Exception) {
+                android.util.Log.w("KanakRepository", "Multi-tenant save error: ${e.message}")
+            }
+        }
+    }
+
+    fun recordAuditEvent(
+        businessId: String,
+        actorUserId: String,
+        actorEmail: String,
+        action: String,
+        targetType: String,
+        targetId: String,
+        details: String
+    ) {
+        val record = AuditRecord(
+            auditId = UUID.randomUUID().toString(),
+            businessId = businessId,
+            actorUserId = actorUserId,
+            actorEmail = actorEmail,
+            action = action,
+            targetType = targetType,
+            targetId = targetId,
+            details = details,
+            timestamp = getBahrainTimestampString()
         )
-        _suppliers.value = listOf(s1, s2)
+        _auditRecords.value = listOf(record) + _auditRecords.value.take(199)
+    }
+
+    suspend fun createVan(
+        vanCode: String,
+        vanName: String,
+        registrationNo: String = "",
+        assignedSalespersonId: String? = null,
+        assignedSalespersonName: String? = null,
+        notes: String = ""
+    ): Result<Van> = mutationMutex.withLock {
+        val trimmedCode = vanCode.trim().uppercase()
+        val trimmedName = vanName.trim()
+        if (trimmedCode.isBlank()) return Result.failure(IllegalArgumentException("Van code cannot be empty"))
+        if (trimmedName.isBlank()) return Result.failure(IllegalArgumentException("Van name cannot be empty"))
+
+        if (_vans.value.any { it.vanCode.equals(trimmedCode, ignoreCase = true) }) {
+            return Result.failure(IllegalArgumentException("Van with code '$trimmedCode' already exists"))
+        }
+
+        val van = Van(
+            vanId = UUID.randomUUID().toString(),
+            businessId = getBusinessId(),
+            vanCode = trimmedCode,
+            vanName = trimmedName,
+            registrationNo = registrationNo.trim(),
+            assignedSalespersonId = assignedSalespersonId,
+            assignedSalespersonName = assignedSalespersonName,
+            status = if (assignedSalespersonId != null) Van.STATUS_ACTIVE else Van.STATUS_AVAILABLE,
+            notes = notes.trim()
+        )
+
+        _vans.value = _vans.value + van
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = "admin",
+            actorEmail = "owner",
+            action = "VAN_CREATED",
+            targetType = "VAN",
+            targetId = van.vanId,
+            details = "Created van ${van.vanCode} (${van.vanName})"
+        )
+        saveMultiTenantState()
+        recalculateDashboard()
+        return Result.success(van)
+    }
+
+    suspend fun updateVan(van: Van): Result<Van> = mutationMutex.withLock {
+        val index = _vans.value.indexOfFirst { it.vanId == van.vanId }
+        if (index == -1) return Result.failure(IllegalArgumentException("Van not found"))
+
+        val list = _vans.value.toMutableList()
+        list[index] = van
+        _vans.value = list
+
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = "admin",
+            actorEmail = "owner",
+            action = "VAN_UPDATED",
+            targetType = "VAN",
+            targetId = van.vanId,
+            details = "Updated van ${van.vanCode}"
+        )
+        saveMultiTenantState()
+        recalculateDashboard()
+        return Result.success(van)
+    }
+
+    suspend fun assignSalespersonToVan(
+        vanId: String,
+        salespersonId: String?,
+        salespersonName: String?
+    ): Result<Van> = mutationMutex.withLock {
+        val index = _vans.value.indexOfFirst { it.vanId == vanId }
+        if (index == -1) return Result.failure(IllegalArgumentException("Van not found"))
+
+        val currentVan = _vans.value[index]
+        val updatedVan = currentVan.copy(
+            assignedSalespersonId = salespersonId,
+            assignedSalespersonName = salespersonName,
+            status = if (salespersonId != null) Van.STATUS_ACTIVE else Van.STATUS_AVAILABLE
+        )
+        val updatedList = _vans.value.toMutableList()
+        updatedList[index] = updatedVan
+        _vans.value = updatedList
+
+        // Update corresponding employee membership if found
+        if (salespersonId != null) {
+            val memIndex = _teamMemberships.value.indexOfFirst { it.userId == salespersonId }
+            if (memIndex != -1) {
+                val mem = _teamMemberships.value[memIndex]
+                val updatedMemList = _teamMemberships.value.toMutableList()
+                updatedMemList[memIndex] = mem.copy(assignedVanId = vanId, assignedVanCode = updatedVan.vanCode)
+                _teamMemberships.value = updatedMemList
+            }
+        }
+
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = "admin",
+            actorEmail = "owner",
+            action = "VAN_ASSIGNED",
+            targetType = "VAN",
+            targetId = vanId,
+            details = "Assigned ${salespersonName ?: "unassigned"} to van ${updatedVan.vanCode}"
+        )
+        saveMultiTenantState()
+        recalculateDashboard()
+        return Result.success(updatedVan)
+    }
+
+    suspend fun deleteVan(vanId: String): Result<Unit> = mutationMutex.withLock {
+        val van = _vans.value.find { it.vanId == vanId }
+            ?: return Result.failure(IllegalArgumentException("Van not found"))
+
+        // Check if any invoices are associated with this van
+        val hasInvoices = _invoices.value.any { it.vanId == vanId }
+        if (hasInvoices) {
+            return Result.failure(IllegalStateException("Cannot delete van ${van.vanCode} because invoices are recorded against it. Set status to Maintenance instead."))
+        }
+
+        // Check if van has inventory
+        val vanStock = _vanStocks.value[vanId]?.values?.any { it > BigDecimal.ZERO } == true
+        if (vanStock) {
+            return Result.failure(IllegalStateException("Cannot delete van ${van.vanCode} while it has allocated inventory. Please transfer all stock back to warehouse first."))
+        }
+
+        val updatedVans = _vans.value.filter { it.vanId != vanId }
+        _vans.value = updatedVans
+
+        val currentVanStocks = _vanStocks.value.toMutableMap()
+        currentVanStocks.remove(vanId)
+        _vanStocks.value = currentVanStocks
+
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = "admin",
+            actorEmail = "owner",
+            action = "VAN_DELETED",
+            targetType = "VAN",
+            targetId = vanId,
+            details = "Deleted van ${van.vanCode} (${van.vanName})"
+        )
+        saveMultiTenantState()
+        recalculateDashboard()
+        return Result.success(Unit)
+    }
+
+    fun resolveUserWithMembership(baseUser: User): User {
+        val cleanEmail = baseUser.email.trim()
+        if (cleanEmail.equals("zanabalmuhamed@gmail.com", ignoreCase = true) ||
+            cleanEmail.equals("admin@kanak-fmcg.bh", ignoreCase = true)) {
+            return baseUser.copy(
+                role = User.ROLE_OWNER,
+                permissions = KanakPermissions.ALL_PERMISSIONS,
+                businessId = getBusinessId(),
+                businessName = getBusinessName()
+            )
+        }
+
+        val membership = _teamMemberships.value.find {
+            it.email.equals(cleanEmail, ignoreCase = true) || it.userId == baseUser.userId
+        }
+        if (membership != null) {
+            return baseUser.copy(
+                role = membership.role,
+                businessId = membership.businessId,
+                businessName = membership.businessName,
+                assignedVanId = membership.assignedVanId,
+                assignedVanCode = membership.assignedVanCode,
+                permissions = membership.permissions,
+                status = membership.status
+            )
+        }
+
+        val profile = LicenseManager(context).loadProfile()
+        if (profile.email.equals(cleanEmail, ignoreCase = true) && profile.isActivated) {
+            val companyNameStr: String = if (profile.companyName.isNotBlank()) profile.companyName else getBusinessName()
+            return baseUser.copy(
+                role = User.ROLE_OWNER,
+                businessId = getBusinessId(),
+                businessName = companyNameStr,
+                permissions = KanakPermissions.ALL_PERMISSIONS
+            )
+        }
+
+        return baseUser
+    }
+
+    suspend fun transferStock(
+        sourceType: String, // "WAREHOUSE" or "VAN"
+        sourceId: String,   // "WAREHOUSE" or vanId
+        destinationVanId: String,
+        productId: String,
+        qty: BigDecimal,
+        transferredBy: String,
+        notes: String = ""
+    ): Result<StockTransfer> = mutationMutex.withLock {
+        if (qty <= BigDecimal.ZERO) {
+            return Result.failure(IllegalArgumentException("Transfer quantity must be greater than zero"))
+        }
+
+        val prod = _products.value.find { it.productId == productId }
+            ?: return Result.failure(IllegalArgumentException("Product not found"))
+
+        val isReturnToWarehouse = destinationVanId.equals("WAREHOUSE", ignoreCase = true) ||
+                destinationVanId.equals("central_warehouse", ignoreCase = true)
+
+        val destVan = if (!isReturnToWarehouse) {
+            _vans.value.find { it.vanId == destinationVanId }
+                ?: return Result.failure(IllegalArgumentException("Destination van not found"))
+        } else null
+
+        val currentVanStocks = _vanStocks.value.toMutableMap()
+        val destVanStockMap = if (!isReturnToWarehouse) {
+            (currentVanStocks[destinationVanId] ?: emptyMap()).toMutableMap()
+        } else mutableMapOf()
+
+        val sourceName: String
+        if (sourceType.equals("WAREHOUSE", ignoreCase = true)) {
+            sourceName = "Central Warehouse"
+            if (prod.stockQty < qty) {
+                return Result.failure(IllegalStateException("Insufficient warehouse stock for '${prod.name}'. Available: ${prod.stockQty}, requested: $qty"))
+            }
+            // Deduct from warehouse
+            val updatedProducts = _products.value.toMutableList()
+            val prodIdx = updatedProducts.indexOfFirst { it.productId == productId }
+            updatedProducts[prodIdx] = prod.copy(stockQty = prod.stockQty.subtract(qty))
+            _products.value = updatedProducts
+            scope.launch(Dispatchers.IO) {
+                roomDb.productDao().updateStock(productId, updatedProducts[prodIdx].stockQty)
+            }
+        } else {
+            val srcVan = _vans.value.find { it.vanId == sourceId }
+                ?: return Result.failure(IllegalArgumentException("Source van not found"))
+            sourceName = srcVan.vanCode
+            val srcVanStockMap = (currentVanStocks[sourceId] ?: emptyMap()).toMutableMap()
+            val currentSrcStock = srcVanStockMap[productId] ?: BigDecimal.ZERO
+            if (currentSrcStock < qty) {
+                return Result.failure(IllegalStateException("Insufficient stock in ${srcVan.vanCode} for '${prod.name}'. Available: $currentSrcStock, requested: $qty"))
+            }
+            srcVanStockMap[productId] = currentSrcStock.subtract(qty)
+            currentVanStocks[sourceId] = srcVanStockMap
+            _vanStocks.value = currentVanStocks
+        }
+
+        val destinationVanName: String
+        if (isReturnToWarehouse) {
+            destinationVanName = "Central Warehouse"
+            val updatedProducts = _products.value.toMutableList()
+            val prodIdx = updatedProducts.indexOfFirst { it.productId == productId }
+            if (prodIdx != -1) {
+                updatedProducts[prodIdx] = prod.copy(stockQty = prod.stockQty.add(qty))
+                _products.value = updatedProducts
+                scope.launch(Dispatchers.IO) {
+                    roomDb.productDao().updateStock(productId, updatedProducts[prodIdx].stockQty)
+                }
+            }
+        } else {
+            destinationVanName = "${destVan?.vanCode} (${destVan?.vanName})"
+            val currentDestStock = destVanStockMap[productId] ?: BigDecimal.ZERO
+            destVanStockMap[productId] = currentDestStock.add(qty)
+            currentVanStocks[destinationVanId] = destVanStockMap
+            _vanStocks.value = currentVanStocks
+        }
+
+        val transfer = StockTransfer(
+            transferId = UUID.randomUUID().toString(),
+            businessId = getBusinessId(),
+            sourceType = sourceType.uppercase(),
+            sourceId = sourceId,
+            sourceName = sourceName,
+            destinationVanId = destinationVanId,
+            destinationVanName = destinationVanName,
+            productId = productId,
+            productName = prod.name,
+            qty = qty,
+            transferredBy = transferredBy,
+            timestamp = getBahrainTimestampString(),
+            notes = notes
+        )
+
+        _stockTransfers.value = listOf(transfer) + _stockTransfers.value
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = transferredBy,
+            actorEmail = transferredBy,
+            action = "STOCK_TRANSFERRED",
+            targetType = "INVENTORY",
+            targetId = transfer.transferId,
+            details = "Transferred ${qty.stripTrailingZeros().toPlainString()} of ${prod.name} from $sourceName to $destinationVanName"
+        )
+        saveMultiTenantState()
+        saveLocalDatabase()
+        return Result.success(transfer)
+    }
+
+    fun getVanStock(vanId: String, productId: String): BigDecimal {
+        return _vanStocks.value[vanId]?.get(productId) ?: BigDecimal.ZERO
+    }
+
+    suspend fun inviteEmployee(
+        recipientEmail: String,
+        role: String = User.ROLE_SALESPERSON,
+        assignedVanId: String? = null,
+        permissions: Set<String> = KanakPermissions.DEFAULT_SALESPERSON_PERMISSIONS,
+        invitedBy: String
+    ): Result<EmployeeInvitation> = mutationMutex.withLock {
+        val trimmedEmail = recipientEmail.trim().lowercase()
+        if (trimmedEmail.isBlank() || !trimmedEmail.contains("@")) {
+            return Result.failure(IllegalArgumentException("Please provide a valid recipient email"))
+        }
+
+        val assignedVan = _vans.value.find { it.vanId == assignedVanId }
+        val randomDigits = (1000..9999).random()
+        val inviteCode = "KNK-$randomDigits"
+
+        val invitation = EmployeeInvitation(
+            invitationId = UUID.randomUUID().toString(),
+            businessId = getBusinessId(),
+            businessName = getBusinessName(),
+            recipientEmail = trimmedEmail,
+            role = role,
+            assignedVanId = assignedVanId,
+            assignedVanCode = assignedVan?.vanCode,
+            permissions = permissions,
+            inviteCode = inviteCode,
+            status = EmployeeInvitation.STATUS_PENDING,
+            createdAt = getBahrainDateString(),
+            expiresAt = "2026-11-30"
+        )
+
+        _pendingInvitations.value = listOf(invitation) + _pendingInvitations.value
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = invitedBy,
+            actorEmail = invitedBy,
+            action = "EMPLOYEE_INVITED",
+            targetType = "INVITATION",
+            targetId = invitation.invitationId,
+            details = "Invited $trimmedEmail as $role to van ${assignedVan?.vanCode ?: "None"}"
+        )
+        saveMultiTenantState()
+        return Result.success(invitation)
+    }
+
+    suspend fun resendInvitation(invitationId: String): Result<EmployeeInvitation> = mutationMutex.withLock {
+        val index = _pendingInvitations.value.indexOfFirst { it.invitationId == invitationId }
+        if (index == -1) return Result.failure(IllegalArgumentException("Invitation not found"))
+        val inv = _pendingInvitations.value[index]
+        return Result.success(inv)
+    }
+
+    suspend fun revokeInvitation(invitationId: String): Result<Unit> = mutationMutex.withLock {
+        val index = _pendingInvitations.value.indexOfFirst { it.invitationId == invitationId }
+        if (index == -1) return Result.failure(IllegalArgumentException("Invitation not found"))
+
+        val inv = _pendingInvitations.value[index]
+        val updated = _pendingInvitations.value.toMutableList()
+        updated[index] = inv.copy(status = EmployeeInvitation.STATUS_REVOKED)
+        _pendingInvitations.value = updated
+        saveMultiTenantState()
+        return Result.success(Unit)
+    }
+
+    suspend fun acceptInvitation(
+        inviteCode: String,
+        user: User
+    ): Result<EmployeeMembership> = mutationMutex.withLock {
+        val cleanCode = inviteCode.trim().uppercase()
+        val index = _pendingInvitations.value.indexOfFirst {
+            it.inviteCode.equals(cleanCode, ignoreCase = true) && it.status == EmployeeInvitation.STATUS_PENDING
+        }
+        if (index == -1) {
+            return Result.failure(IllegalArgumentException("Invalid or expired invitation code. Please check with your business owner."))
+        }
+
+        val invite = _pendingInvitations.value[index]
+        val updatedInvites = _pendingInvitations.value.toMutableList()
+        updatedInvites[index] = invite.copy(status = EmployeeInvitation.STATUS_ACCEPTED)
+        _pendingInvitations.value = updatedInvites
+
+        val membership = EmployeeMembership(
+            membershipId = UUID.randomUUID().toString(),
+            businessId = invite.businessId,
+            businessName = invite.businessName,
+            userId = user.userId,
+            email = user.email,
+            displayName = user.displayName,
+            role = invite.role,
+            assignedVanId = invite.assignedVanId,
+            assignedVanCode = invite.assignedVanCode,
+            permissions = invite.permissions,
+            status = "ACTIVE",
+            joinedAt = getBahrainDateString()
+        )
+
+        _teamMemberships.value = _teamMemberships.value + membership
+
+        // If van was assigned, assign driver name to van
+        if (invite.assignedVanId != null) {
+            val vIdx = _vans.value.indexOfFirst { it.vanId == invite.assignedVanId }
+            if (vIdx != -1) {
+                val v = _vans.value[vIdx]
+                val vList = _vans.value.toMutableList()
+                vList[vIdx] = v.copy(
+                    assignedSalespersonId = user.userId,
+                    assignedSalespersonName = user.displayName,
+                    status = Van.STATUS_ACTIVE
+                )
+                _vans.value = vList
+            }
+        }
+
+        recordAuditEvent(
+            businessId = invite.businessId,
+            actorUserId = user.userId,
+            actorEmail = user.email,
+            action = "INVITATION_ACCEPTED",
+            targetType = "MEMBERSHIP",
+            targetId = membership.membershipId,
+            details = "${user.email} joined ${invite.businessName} as ${invite.role}"
+        )
+        saveMultiTenantState()
+        return Result.success(membership)
+    }
+
+    suspend fun updateMemberRoleAndVan(
+        membershipId: String,
+        newRole: String,
+        newVanId: String?,
+        newPermissions: Set<String>,
+        updatedBy: String
+    ): Result<EmployeeMembership> = mutationMutex.withLock {
+        val index = _teamMemberships.value.indexOfFirst { it.membershipId == membershipId }
+        if (index == -1) return Result.failure(IllegalArgumentException("Membership not found"))
+
+        val current = _teamMemberships.value[index]
+        val van = _vans.value.find { it.vanId == newVanId }
+        val updated = current.copy(
+            role = newRole,
+            assignedVanId = newVanId,
+            assignedVanCode = van?.vanCode,
+            permissions = newPermissions
+        )
+        val list = _teamMemberships.value.toMutableList()
+        list[index] = updated
+        _teamMemberships.value = list
+
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = updatedBy,
+            actorEmail = updatedBy,
+            action = "MEMBER_UPDATED",
+            targetType = "MEMBERSHIP",
+            targetId = membershipId,
+            details = "Updated ${current.email}: Role=$newRole, Van=${van?.vanCode ?: "None"}"
+        )
+        saveMultiTenantState()
+        return Result.success(updated)
+    }
+
+    suspend fun toggleMemberStatus(
+        membershipId: String,
+        suspend: Boolean,
+        updatedBy: String
+    ): Result<EmployeeMembership> = mutationMutex.withLock {
+        val index = _teamMemberships.value.indexOfFirst { it.membershipId == membershipId }
+        if (index == -1) return Result.failure(IllegalArgumentException("Membership not found"))
+
+        val current = _teamMemberships.value[index]
+        val newStatus = if (suspend) "SUSPENDED" else "ACTIVE"
+        val updated = current.copy(status = newStatus)
+        val list = _teamMemberships.value.toMutableList()
+        list[index] = updated
+        _teamMemberships.value = list
+
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = updatedBy,
+            actorEmail = updatedBy,
+            action = if (suspend) "MEMBER_SUSPENDED" else "MEMBER_ACTIVATED",
+            targetType = "MEMBERSHIP",
+            targetId = membershipId,
+            details = "${if (suspend) "Suspended" else "Activated"} access for ${current.email}"
+        )
+        saveMultiTenantState()
+        return Result.success(updated)
+    }
+
+    suspend fun removeMember(
+        membershipId: String,
+        removedBy: String
+    ): Result<Unit> = mutationMutex.withLock {
+        val member = _teamMemberships.value.find { it.membershipId == membershipId }
+            ?: return Result.failure(IllegalArgumentException("Member not found"))
+
+        _teamMemberships.value = _teamMemberships.value.filter { it.membershipId != membershipId }
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = removedBy,
+            actorEmail = removedBy,
+            action = "MEMBER_REMOVED",
+            targetType = "MEMBERSHIP",
+            targetId = membershipId,
+            details = "Removed membership for ${member.email}"
+        )
+        saveMultiTenantState()
+        return Result.success(Unit)
+    }
+
+    fun getDailySalesSummary(
+        vanIdFilter: String? = null,
+        dateFilter: String? = null
+    ): DailySalesSummaryData {
+        val bahrainTz = TimeZone.getTimeZone("Asia/Bahrain")
+        val df = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = bahrainTz }
+        val targetDate = dateFilter ?: df.format(Date())
+
+        val targetInvoices = _invoices.value.filter { inv ->
+            !inv.isVoid && inv.date.startsWith(targetDate) && (vanIdFilter.isNullOrBlank() || inv.vanId == vanIdFilter)
+        }
+
+        var totalGross = BigDecimal.ZERO
+        var totalCash = BigDecimal.ZERO
+        var cashCount = 0
+        var totalCredit = BigDecimal.ZERO
+        var creditCount = 0
+        var cashCollectedCredit = BigDecimal.ZERO
+        var outstandingCredit = BigDecimal.ZERO
+        var taxableSubtotal = BigDecimal.ZERO
+        var vatCollected = BigDecimal.ZERO
+
+        for (inv in targetInvoices) {
+            totalGross = totalGross.add(inv.total)
+            taxableSubtotal = taxableSubtotal.add(inv.subtotal)
+            vatCollected = vatCollected.add(inv.vatTotal)
+
+            if (!inv.isCredit) {
+                totalCash = totalCash.add(inv.total)
+                cashCount++
+            } else {
+                totalCredit = totalCredit.add(inv.total)
+                creditCount++
+                cashCollectedCredit = cashCollectedCredit.add(inv.amountPaid)
+                outstandingCredit = outstandingCredit.add(inv.balanceDue)
+            }
+        }
+
+        val vanObj = _vans.value.find { it.vanId == vanIdFilter }
+
+        return DailySalesSummaryData(
+            sessionDate = targetDate,
+            vanId = vanIdFilter,
+            vanCode = vanObj?.vanCode,
+            totalGrossSales = BahrainFinancials.scaleAmount(totalGross),
+            totalInvoicesCount = targetInvoices.size,
+            totalCashSales = BahrainFinancials.scaleAmount(totalCash),
+            cashInvoicesCount = cashCount,
+            totalCreditSales = BahrainFinancials.scaleAmount(totalCredit),
+            creditInvoicesCount = creditCount,
+            cashCollectedOnCredit = BahrainFinancials.scaleAmount(cashCollectedCredit),
+            totalOutstandingCredit = BahrainFinancials.scaleAmount(outstandingCredit),
+            taxableSubtotal = BahrainFinancials.scaleAmount(taxableSubtotal),
+            vatRate = getConfiguredVatRate(),
+            vatAmountCollected = BahrainFinancials.scaleAmount(vatCollected),
+            invoices = targetInvoices
+        )
     }
 }

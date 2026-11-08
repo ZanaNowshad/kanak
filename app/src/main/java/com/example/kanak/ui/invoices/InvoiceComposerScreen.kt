@@ -3,6 +3,7 @@ package com.example.kanak.ui.invoices
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,18 +29,22 @@ import coil.compose.AsyncImage
 import com.example.kanak.data.repository.KanakRepository
 import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.domain.models.Customer
+import com.example.kanak.domain.models.Invoice
 import com.example.kanak.domain.models.Product
+import com.example.kanak.ui.components.KanakBrandLoadingDialog
 import com.example.kanak.ui.components.KanakSearchField
 import com.example.kanak.ui.components.KanakTopBar
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
+import com.example.kanak.domain.models.User
 import java.math.BigDecimal
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InvoiceComposerScreen(
     repository: KanakRepository,
-    currentUserId: String,
+    currentUserId: String = "driver",
+    currentUser: User? = null,
     onNavigateToInvoiceDetail: (String) -> Unit,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -68,6 +73,8 @@ fun InvoiceComposerScreen(
     var productSearchQuery by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var selectedPaymentType by remember { mutableStateOf(Invoice.PAYMENT_CASH) }
+    var showBarcodeScanDialog by remember { mutableStateOf(false) }
 
     // Calculate live totals
     val calculatedLines = remember(cartItems, allProducts) {
@@ -189,6 +196,104 @@ fun InvoiceComposerScreen(
                         )
                     }
 
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Payment Type Selector (Cash Sale vs Customer Credit)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selectedPaymentType == Invoice.PAYMENT_CASH) KanakPrimaryBlue else KanakSurfaceVariant,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { selectedPaymentType = Invoice.PAYMENT_CASH }
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Payments,
+                                    contentDescription = null,
+                                    tint = if (selectedPaymentType == Invoice.PAYMENT_CASH) Color.White else KanakPrimaryText,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Cash (Paid)",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selectedPaymentType == Invoice.PAYMENT_CASH) Color.White else KanakPrimaryText
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selectedPaymentType == Invoice.PAYMENT_CREDIT) Color(0xFFD97706) else KanakSurfaceVariant,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { selectedPaymentType = Invoice.PAYMENT_CREDIT }
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.CreditCard,
+                                    contentDescription = null,
+                                    tint = if (selectedPaymentType == Invoice.PAYMENT_CREDIT) Color.White else KanakPrimaryText,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Credit (Pay Later)",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selectedPaymentType == Invoice.PAYMENT_CREDIT) Color.White else KanakPrimaryText
+                                )
+                            }
+                        }
+                    }
+
+                    if (selectedPaymentType == Invoice.PAYMENT_CREDIT) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = KanakWarningBackground,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Info,
+                                    contentDescription = null,
+                                    tint = KanakWarning,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Items will be given on credit and tracked in customer balance.",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = KanakWarning,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                )
+                            }
+                        }
+                    }
+
                     if (errorMessage != null) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -219,10 +324,17 @@ fun InvoiceComposerScreen(
                                     if (qty > BigDecimal.ZERO) KanakRepository.ProposedLine(prodId, qty) else null
                                 }
 
+                                val effectiveUserId = currentUser?.displayName?.ifBlank { currentUserId } ?: currentUserId
+                                val effectiveVanId = currentUser?.assignedVanId?.ifBlank { "" } ?: ""
+                                val effectiveVanCode = currentUser?.assignedVanCode?.ifBlank { "" } ?: ""
+
                                 val result = repository.createInvoice(
                                     customerId = cust.customerId,
                                     proposedLines = proposed,
-                                    createdBy = currentUserId
+                                    createdBy = effectiveUserId,
+                                    paymentType = selectedPaymentType,
+                                    vanId = effectiveVanId,
+                                    vanCode = effectiveVanCode
                                 )
 
                                 isSaving = false
@@ -239,19 +351,19 @@ fun InvoiceComposerScreen(
                             .testTag("save_invoice_button"),
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = KanakPrimaryBlue,
+                            containerColor = if (selectedPaymentType == Invoice.PAYMENT_CREDIT) Color(0xFFD97706) else KanakPrimaryBlue,
                             contentColor = Color.White
                         ),
                         enabled = !isSaving && selectedCustomer != null && cartItems.isNotEmpty()
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.ReceiptLong,
+                            imageVector = if (selectedPaymentType == Invoice.PAYMENT_CREDIT) Icons.Outlined.CreditCard else Icons.Outlined.ReceiptLong,
                             contentDescription = null,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Save Invoice",
+                            text = if (selectedPaymentType == Invoice.PAYMENT_CREDIT) "Post Credit Invoice (${BahrainFinancials.formatBhd(totals.total)})" else "Save Invoice (${BahrainFinancials.formatBhd(totals.total)})",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                     }
@@ -272,6 +384,26 @@ fun InvoiceComposerScreen(
             // Customer Section Header & Card matching Board 1 Screen 4
             item {
                 Spacer(modifier = Modifier.height(4.dp))
+                if (!currentUser?.assignedVanCode.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = KanakAccentLight,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.LocalShipping, contentDescription = null, tint = KanakPrimaryBlue, modifier = Modifier.size(18.dp))
+                            Text(
+                                text = "Selling from Assigned Van: ${currentUser?.assignedVanCode}",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryBlue)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -375,7 +507,7 @@ fun InvoiceComposerScreen(
                     query = productSearchQuery,
                     onQueryChange = { productSearchQuery = it },
                     placeholder = "Search products by name or barcode...",
-                    onScanClick = {}
+                    onScanClick = { showBarcodeScanDialog = true }
                 )
             }
 
@@ -572,6 +704,7 @@ fun InvoiceComposerScreen(
                                                 verticalAlignment = Alignment.CenterVertically,
                                                 modifier = Modifier.padding(horizontal = 4.dp)
                                             ) {
+                                                val decSource = remember { MutableInteractionSource() }
                                                 IconButton(
                                                     onClick = {
                                                         val newQty = qty.subtract(BigDecimal.ONE)
@@ -581,7 +714,10 @@ fun InvoiceComposerScreen(
                                                             cartItems + (prodId to newQty)
                                                         }
                                                     },
-                                                    modifier = Modifier.size(28.dp)
+                                                    interactionSource = decSource,
+                                                    modifier = Modifier
+                                                        .size(28.dp)
+                                                        .tactilePress(decSource)
                                                 ) {
                                                     Icon(Icons.Default.Remove, contentDescription = "Decrease", tint = KanakPrimaryText, modifier = Modifier.size(16.dp))
                                                 }
@@ -595,13 +731,17 @@ fun InvoiceComposerScreen(
                                                     modifier = Modifier.padding(horizontal = 8.dp)
                                                 )
 
+                                                val incSource = remember { MutableInteractionSource() }
                                                 IconButton(
                                                     onClick = {
                                                         if (qty < prod.stockQty) {
                                                             cartItems = cartItems + (prodId to qty.add(BigDecimal.ONE))
                                                         }
                                                     },
-                                                    modifier = Modifier.size(28.dp)
+                                                    interactionSource = incSource,
+                                                    modifier = Modifier
+                                                        .size(28.dp)
+                                                        .tactilePress(incSource)
                                                 ) {
                                                     Icon(Icons.Default.Add, contentDescription = "Increase", tint = KanakPrimaryText, modifier = Modifier.size(16.dp))
                                                 }
@@ -634,85 +774,9 @@ fun InvoiceComposerScreen(
     // SAVING INVOICE MODAL (BOARD 5 SCREEN 1)
     // =========================================================================
     if (isSaving) {
-        AlertDialog(
-            onDismissRequest = {},
-            containerColor = KanakSurface,
-            shape = RoundedCornerShape(22.dp),
-            title = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = KanakAccentLight,
-                        modifier = Modifier.size(64.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(44.dp),
-                                color = KanakPrimaryBlue,
-                                strokeWidth = 3.dp
-                            )
-                            Icon(
-                                imageVector = Icons.Outlined.ReceiptLong,
-                                contentDescription = null,
-                                tint = KanakPrimaryBlue,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Saving invoice securely...",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = KanakPrimaryText
-                        ),
-                        textAlign = TextAlign.Center
-                    )
-                }
-            },
-            text = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Please don't close the app. Your invoice is being uploaded and stock will be updated only after confirmation.",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            color = KanakSecondaryText,
-                            textAlign = TextAlign.Center
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = KanakSuccessBackground
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = KanakSuccess,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Preventing duplicate submission...",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    color = KanakSuccess,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {}
+        KanakBrandLoadingDialog(
+            message = "Saving Bahrain Tax Invoice...",
+            subMessage = "Recording Stock Movement & Bahrain VAT Ledger"
         )
     }
 
@@ -806,6 +870,18 @@ fun InvoiceComposerScreen(
                     Text("Close")
                 }
             }
+        )
+    }
+
+    if (showBarcodeScanDialog) {
+        com.example.kanak.ui.components.BarcodeScanDialog(
+            products = allProducts,
+            existingProductIdsInInvoice = cartItems.keys,
+            onProductSelected = { prod, isDuplicate ->
+                val currentQty = cartItems[prod.productId] ?: BigDecimal.ZERO
+                cartItems = cartItems + (prod.productId to currentQty.add(BigDecimal.ONE))
+            },
+            onDismiss = { showBarcodeScanDialog = false }
         )
     }
 }

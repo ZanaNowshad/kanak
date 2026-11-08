@@ -30,6 +30,14 @@ object BahrainFinancials {
     private const val BHD_SCALE = 3
     private val ROUNDING = RoundingMode.HALF_UP
 
+    fun rateToPercentage(rate: BigDecimal): BigDecimal {
+        return rate.multiply(BigDecimal("100")).setScale(2, ROUNDING)
+    }
+
+    fun percentageToRate(percentage: BigDecimal): BigDecimal {
+        return percentage.divide(BigDecimal("100"), 4, ROUNDING)
+    }
+
     private val bhdFormat = DecimalFormat("#,##0.000", DecimalFormatSymbols(Locale.US))
 
     fun scaleAmount(amount: BigDecimal): BigDecimal {

@@ -102,8 +102,9 @@ class LicenseManager(private val context: Context) {
      */
     fun isMasterAdmin(email: String?): Boolean {
         if (email.isNullOrBlank()) return false
-        return email.equals(MASTER_ADMIN_EMAIL, ignoreCase = true) ||
-                email.equals("admin@kanak-fmcg.bh", ignoreCase = true)
+        val clean = email.trim()
+        return clean.equals(MASTER_ADMIN_EMAIL, ignoreCase = true) ||
+                clean.equals("admin@kanak-fmcg.bh", ignoreCase = true)
     }
 
     /**
@@ -214,6 +215,8 @@ class LicenseManager(private val context: Context) {
      * Verifies the activation code provided by the user.
      * If valid, activates the company permanently.
      */
+    suspend fun activateLicense(enteredCode: String): Result<Boolean> = validateAndActivate(enteredCode)
+
     suspend fun validateAndActivate(enteredCode: String): Result<Boolean> = withContext(Dispatchers.IO) {
         val profile = loadProfile()
         if (profile.requestId.isBlank()) {
@@ -254,6 +257,134 @@ class LicenseManager(private val context: Context) {
         } else {
             Result.failure(Exception("Invalid Activation Code. Please check the code provided by the administrator or contact $MASTER_ADMIN_EMAIL."))
         }
+    }
+
+    /**
+     * Activates the app for an employee who has joined an already-activated company via an invitation.
+     * Complies with Section 1 of Production Spec: Employees join existing business without separate company activation.
+     */
+    fun activateViaCompanyMembership(companyName: String) {
+        prefs.edit()
+            .putBoolean(KEY_IS_ACTIVATED, true)
+            .putString(KEY_COMPANY_NAME, companyName)
+            .putString(KEY_ACTIVATION_CODE, "COMPANY_INVITATION_ACCEPTED")
+            .apply()
+        _licenseState.value = LicenseState.ACTIVATED
+        _companyProfile.value = loadProfile()
+    }
+
+    /**
+     * Authoritative Cloud Synchronization on Sign-In:
+     * Checks if the user's email was already registered, pending activation, or invited in Firestore.
+     * Prevents already-registered users from ever seeing the registration filling form again.
+     */
+    suspend fun syncUserRegistration(userEmail: String?, businessName: String? = null): LicenseState = withContext(Dispatchers.IO) {
+        val cleanEmail = userEmail?.trim()?.lowercase(Locale.US) ?: ""
+
+        // 1. Master platform admin bypass
+        if (isMasterAdmin(cleanEmail)) {
+            val existingName = prefs.getString(KEY_COMPANY_NAME, null)
+            val finalName = if (!businessName.isNullOrBlank() && !businessName.contains("W.L.L.", ignoreCase = true)) {
+                businessName.trim()
+            } else if (!existingName.isNullOrBlank() && !existingName.contains("W.L.L.", ignoreCase = true) && !existingName.contains("Platform Admin", ignoreCase = true)) {
+                existingName.trim()
+            } else {
+                "KANAK FMCG Wholesale"
+            }
+            prefs.edit()
+                .putBoolean(KEY_IS_ACTIVATED, true)
+                .putString(KEY_COMPANY_NAME, finalName)
+                .putString(KEY_ACTIVATION_CODE, "KNK-MASTER-DEV-PASS")
+                .apply()
+            _licenseState.value = LicenseState.ACTIVATED
+            _companyProfile.value = loadProfile()
+            return@withContext LicenseState.ACTIVATED
+        }
+
+        // 2. Already activated in local preferences?
+        if (prefs.getBoolean(KEY_IS_ACTIVATED, false)) {
+            _licenseState.value = LicenseState.ACTIVATED
+            return@withContext LicenseState.ACTIVATED
+        }
+
+        // 3. Query Firestore company_registrations by email
+        if (cleanEmail.isNotBlank()) {
+            try {
+                val snapshot = firebaseManager.firestore.collection("company_registrations")
+                    .get()
+                    .await()
+
+                val matchedDoc = snapshot.documents.firstOrNull { doc ->
+                    val docEmail = doc.getString("email")?.trim()?.lowercase(Locale.US) ?: ""
+                    docEmail == cleanEmail
+                }
+
+                if (matchedDoc != null) {
+                    val reqId = matchedDoc.getString("requestId") ?: matchedDoc.id
+                    val compName = matchedDoc.getString("companyName") ?: ""
+                    val owner = matchedDoc.getString("ownerName") ?: ""
+                    val phone = matchedDoc.getString("phone") ?: ""
+                    val cr = matchedDoc.getString("crNumber") ?: ""
+                    val addr = matchedDoc.getString("address") ?: ""
+                    val regDate = matchedDoc.getString("registrationDate") ?: ""
+                    val isAct = matchedDoc.getBoolean("isActivated") ?: false
+                    val actCode = matchedDoc.getString("activationCode") ?: ""
+
+                    prefs.edit()
+                        .putString(KEY_REQUEST_ID, reqId)
+                        .putString(KEY_COMPANY_NAME, compName)
+                        .putString(KEY_OWNER_NAME, owner)
+                        .putString(KEY_PHONE, phone)
+                        .putString(KEY_EMAIL, cleanEmail)
+                        .putString(KEY_CR_NUMBER, cr)
+                        .putString(KEY_ADDRESS, addr)
+                        .putString(KEY_REG_DATE, regDate)
+                        .putBoolean(KEY_IS_ACTIVATED, isAct)
+                        .putString(KEY_ACTIVATION_CODE, actCode)
+                        .apply()
+
+                    val prof = CompanyProfile(
+                        requestId = reqId,
+                        companyName = compName,
+                        ownerName = owner,
+                        phone = phone,
+                        email = cleanEmail,
+                        crNumber = cr,
+                        address = addr,
+                        registrationDate = regDate,
+                        isActivated = isAct,
+                        activationCode = actCode,
+                        status = if (isAct) "ACTIVATED" else "PENDING"
+                    )
+                    _companyProfile.value = prof
+                    val resolvedState = if (isAct) LicenseState.ACTIVATED else LicenseState.PENDING_ACTIVATION
+                    _licenseState.value = resolvedState
+                    return@withContext resolvedState
+                }
+
+                // 4. Check if registered as an invited team member
+                val memberDoc = firebaseManager.firestore.collection("team_memberships")
+                    .document(cleanEmail)
+                    .get()
+                    .await()
+
+                if (memberDoc.exists()) {
+                    val comp = memberDoc.getString("businessName") ?: "KANAK FMCG"
+                    activateViaCompanyMembership(comp)
+                    return@withContext LicenseState.ACTIVATED
+                }
+            } catch (e: Exception) {
+                Log.w("LicenseManager", "Cloud check by email non-blocking: ${e.message}")
+            }
+        }
+
+        // 5. Existing business affiliation in user profile
+        if (!businessName.isNullOrBlank() && businessName != "My Company" && businessName != "My Business") {
+            activateViaCompanyMembership(businessName)
+            return@withContext LicenseState.ACTIVATED
+        }
+
+        return@withContext _licenseState.value
     }
 
     /**

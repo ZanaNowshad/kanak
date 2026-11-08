@@ -1,0 +1,590 @@
+# KANAK — Production-Grade Product, UX, Data and Systems Design
+
+**Specification:** KANAK-SPEC-1.0.0 · **Date:** 2026-11-06 · **Market:** Bahrain · **Target:** Native Android APK + cloud backend + optional Google Sheets catalog integration.
+
+**Status:** Proposed implementation baseline, not a statement that the app is already implemented, deployed, or compliant. All requirements tagged **MUST** are release gates. All thresholds identified as **design targets** require performance validation.
+
+## 0. Executive decision
+
+KANAK is a **multi-tenant, multi-van FMCG wholesale platform** with one authoritative transactional database. Google Sheets provides an owner-friendly master-data editor and read-only business exports, inspired by publicly documented Store.link synchronization patterns. Google Sheets, Android caches, and Google Apps Script **never constitute authoritative stock or invoice ledgers**.
+
+- **Authority:** PostgreSQL is the system of record for companies, members, roles, products, inventory, prices effective for invoices, orders, payments, invoice sequences, returns, licenses and audits.
+- **Identity:** Firebase Authentication (Google Sign-In) authenticates people; FastAPI establishes company membership, scopes and capabilities. Google Sheets OAuth is a **separate, optional** permission flow.
+- **Catalog edits:** Products, Customers and Suppliers are edit-capable in a connected Google workbook. Every edit is imported through a validated, revision-aware backend change proposal. Application-originated edits commit to PostgreSQL first and are exported asynchronously.
+- **Transactions:** Warehouse replenishment, transfers, checkout, returns, payments and day close commit as idempotent PostgreSQL transactions.
+- **Offline:** Android Room stores scoped caches and a durable outbox. Offline sales require **pre-reserved, device-scoped inventory allowance** and conditional permissions. Never mint a final global invoice number while disconnected.
+- **Distribution:** Direct signed APK, no Play Store dependency. English / Arabic RTL. BHD (3 decimal places). Bahrain timezone Asia/Bahrain.
+
+### 0.1 Design assumptions / decisions requiring commercial approval
+
+| Decision | Proposed default | Why / impact |
+|---|---|---|
+| Source of truth | PostgreSQL | Explicit 17-gate correctness mandate and multi-van safety |
+| Sheets integration | Opt-in per company; Product/Customer/Supplier edit only | Enables owner spreadsheet workflows without permitting stock bypass |
+| VAT | 10% standard taxable; support zero-rated and exempt tax codes | Bahrain has non-standard tax treatments; never hardcode all goods to 10% |
+| Pricing | VAT-inclusive selling price in fils | Bahrain market expectation and earlier KANAK requirement |
+| Offline scope | Sales and preapproved customer capture only | Administrative and financial permissions require server checks |
+| Offline device allocation | Exclusive stock quota by device, not only by van | Avoids double-spend across two offline devices |
+| Manager capability | Company-configured RBAC flags | Roles alone are too coarse for mixed SMEs |
+| Source deletion | Soft disable on explicit owner confirmation | Prevents accidental mass deletion from sheet or row rearrangement |
+| Production license | Manual approval + single-use activation code | Operator-approved onboarding |
+| Distribution | Direct APK signed with controlled release key | Play Store optional, not assumed |
+
+## 1. Actors and companies
+
+### 1.1 Tenant and principal definitions
+
+- `platform`: operator account boundary; global control plane with no default read permission to tenant financial records.
+- `company`: isolated tenant with unique `company_id`, CR, optional VAT TRN, name, office address, timezone, license state, and policy settings.
+- `user`: global Firebase UID representing a person. A user can belong to multiple companies, independently scoped.
+- `membership`: `(company_id,user_id,role,status)` with optional fine-grained capabilities, dates, and manager approval.
+- `van`: company-owned stock and operational unit; includes active assignments and linked inventory location.
+- `device`: registered Android installation, bound to user and active company; enrollment can be revoked.
+- `shift`: one sales operator's active operating interval on a van.
+- `warehouse`: company inventory location; company may have several.
+
+**Tenant isolation invariant:** Every tenant-owned row has a non-null `company_id`. Cross-tenant foreign keys are composite, e.g. `(company_id, product_id)` referencing a tenant-scoped unique key. Every API query sets an authorization scope derived from verified identity; incoming `company_id` is **not** authoritative. Enforce additional PostgreSQL RLS and automated negative tests.
+
+### 1.2 Roles and policy matrix
+
+Legend: **Y** always permitted; **C** if granted company capability; **O** own/assigned resources only; **N** denied. `PLATFORM_ADMIN` is intentionally excluded from normal tenant permissions; only operator functions (approval, license, support incident) are available, audited, with controlled support access.
+
+| Operation | OWNER | MANAGER | SALESPERSON |
+|---|:---:|:---:|:---:|
+| View company dashboard and overall reports | Y | C | N |
+| View own route, customers, stock and sales | Y | Y | O |
+| Create sale / record cash collection | Y | Y | O |
+| Void posted invoice | Y | C | N |
+| Initiate return / credit note | Y | C | C, approval required |
+| View or edit selling prices | Y | C | N (view effective price only) |
+| Import products via Google Sheets | Y | C | N |
+| Add customers | Y | Y | C |
+| Add suppliers | Y | C | C as pending proposal |
+| Confirm purchases / receive stock | Y | C | N |
+| Transfer warehouse stock to van | Y | C | N |
+| Transfer between vans | Y | C | N |
+| Create/manage vans | Y | C | N |
+| Invite, revoke, assign staff | Y | C for restricted staff roles | N |
+| Change organization permissions | Y | N | N |
+| Connect/disconnect Google Sheets | Y | C | N |
+| Manage activation/licensing | Operator | N | N |
+| View all company audit events | Y | C | N |
+
+Every mutation checks authenticated user, active membership, company state, device restrictions, capability and resource relationship on **the server**; UI hidden actions are not protection.
+
+## 2. Platform components
+
+```mermaid
+flowchart TD
+    Owner[Owner/Manager in Google Sheets] --> Sheets[Google Sheets: editable catalog tabs]
+    Sheets --> Trigger[Apps Script onEdit hint and/or Drive watch]
+    Trigger --> Q[Debounced sync queue]
+    Q --> Ingest[Sync worker: fetch/normalize/diff/validate]
+    Ingest --> DB[(PostgreSQL authoritative data)]
+    DB --> Export[Outbox export worker]
+    Export --> Sheets
+    Android[Android app: Compose/Room/WorkManager] <-->|HTTPS /v1 + token| API[FastAPI]
+    API --> DB
+    API --> Events[Per-tenant change stream/FCM wake hints]
+    Events --> Android
+    API --> Print[Printer command on handset; never remote print directly]
+    Admin[Platform admin web console] --> API
+```
+
+**Server services:** API application, PostgreSQL database, durable job queue/outbox, background worker, change-stream endpoint, Google Sheets connector, object storage for images and report files, backup/restore system, monitoring and alerts. Prefer a modular monolith with separate worker processes for v1; do not introduce microservices without measured need.
+
+**Android:** Kotlin, Compose Material 3, lifecycle-aware MVVM, Hilt/Koin DI (choose one), Retrofit/OkHttp, Kotlin serialization, Room + migrations, encrypted token and local-secret handling, WorkManager, Bluetooth ESC/POS printing. UI supports accessible touch sizes, screen-reader labels and bidi-safe numbers.
+
+**Backend:** Python FastAPI, Pydantic schemas, SQLAlchemy 2.x, Alembic migrations, PostgreSQL, queue processing with durable records and retries, TLS reverse proxy, structured observability. Business rules exist only in backend domain services, with matching local **pre-validation** for offline UX.
+
+## 3. App registration and activation
+
+### 3.1 Business states
+
+`DRAFT_REGISTRATION -> SUBMITTED -> UNDER_REVIEW -> APPROVED_AWAITING_ACTIVATION -> ACTIVE -> SUSPENDED / EXPIRED`; `REJECTED` terminal with possible new application. State changes are audited.
+
+1. Google Sign-In with Android Credential Manager, then Firebase Auth.
+2. Backend verifies Firebase ID token (signature, issuer, audience, expiry, uid) and creates global principal if absent.
+3. User submits legal business name, CR, TRN if registered, address, owner phone/email, main warehouse, timezone and default tax preferences. Unverified TRN cannot be shown as verified.
+4. Platform admin receives pending registration, reviews evidence and approves or rejects with reason.
+5. Approval issues **single-use opaque activation code**, bound to company, with expiry, attempt cap, server-side hashed verifier, issuer and audit trail. Deliver via a controlled admin channel (email/WhatsApp manual issuance is acceptable but don't store secret in logs).
+6. Owner redeems code. Backend checks pending state, company binding, membership, code verification, expiry, rate limits and atomic used-state transition; company becomes ACTIVE.
+7. Company wizard: default warehouse, first van, invoice series, user/team permissions, tax identifiers, optional sheet connection, product import, optional printer pairing.
+
+**Security:** No login screen bypass, local flag, spreadsheet permission or Firestore document may activate a license. If an already activated device is offline, a separately defined grace policy may permit previously issued sales allowances; never permit offline registration/activation.
+
+## 4. Core relational model (conceptual, migration-ready)
+
+All quantities and money are exact decimal/integer representations. All transaction IDs are server UUIDv7 or UUIDv4; no SKU or barcode is used as a primary key.
+
+| Group | Tables / important attributes |
+|---|---|
+| Identity & policy | `users(uid, email_verified, ...)`, `companies(company_id, cr, trn, ...)`, `memberships(company_id,user_id,role,status)`, `membership_permissions`, `user_devices`, `sessions`, `invitations` |
+| Licensing | `company_applications`, `licenses`, `activation_codes(code_hash,company_id,expires_at,used_at,attempts)` |
+| Catalog | `products(company_id,id,sku,name,unit,vat_code,price_inclusive_fils,active,version)`, `product_barcodes(company_id,barcode,product_id)`, `product_price_history`, `product_images`, `customers`, `suppliers` |
+| Warehouse & van | `locations(id,company_id,type,...)`, `vans`, `van_assignments`, `stock_balances(company_id,location_id,product_id,qty_minor,reserved_minor,version)`, `stock_movements` |
+| Offline | `device_stock_allowances`, `offline_operations`, `offline_device_revisions`, `operation_receipts` |
+| Business | `purchases`, `purchase_lines`, `stock_transfers`, `stock_transfer_lines`, `invoices`, `invoice_lines`, `payments`, `returns`, `credit_notes`, `customer_ledger` |
+| Reporting & audit | `invoice_number_series`, `shifts`, `day_closes`, `company_events`, `audit_events`, `idempotency_records`, `outbox_events` |
+| Google integration | `google_connections`, `sheet_bindings`, `sheet_row_mappings`, `sheet_sync_runs`, `sheet_import_errors`, `sheet_export_outbox`, `sheet_conflicts`, `sheet_watch_channels` |
+
+### 4.1 Key database constraints
+
+- `UNIQUE(company_id, sku)` for active product catalog; barcode uniqueness across company's live product-barcode rows. Distinct products must not share identical primary lookup barcode without an explicit disambiguation policy.
+- `UNIQUE(company_id, invoice_series_id, sequence_number)`; sequence assigned only at commit by database lock.
+- `UNIQUE(company_id, operation_type, idempotency_key)` with request-body hash; retries with same key/different payload return `409 IDEMPOTENCY_PAYLOAD_MISMATCH`.
+- `UNIQUE(company_id, source, external_source_id)` for import dedup where external ID applies.
+- `CHECK(on_hand_minor >= 0)` for sellable/controlled stock balances; separate quarantine, adjustments and returns ledger; never hide negative through reporting.
+- Foreign keys include `company_id` on both ends, or verified same-tenant relation.
+- Every posted financial line includes immutable product ID/name/barcode/unit snapshot, VAT category/rate snapshot, unit inclusive price, original line amount, discount, net, tax and gross.
+- Currency fields `BIGINT` **fils**, even though Android display uses `0.000` BHD. Quantity in `BIGINT` scaled by a declared product-specific fixed-point unit (v1 default milliunit = 1/1000 sales unit). No `Double` for finance.
+- PostgreSQL migrations, RLS policies and transaction functions all version-controlled and tested.
+
+## 5. Inventory invariants
+
+**Inventory stock is a ledger, not a mutable spreadsheet cell.** A stock-changing event creates an immutable stock movement and updates a materialized balance **in the same DB transaction**.
+
+### 5.1 Movement types
+
+`PURCHASE_RECEIPT`, `WAREHOUSE_TO_VAN`, `VAN_TO_WAREHOUSE`, `VAN_TO_VAN` (explicit custody transfer), `SALE`, `RETURN_SELLABLE`, `RETURN_QUARANTINE`, `ADJUSTMENT_PLUS`, `ADJUSTMENT_MINUS`, `LOSS`, `DAMAGE`, `TRANSFER_REVERSAL`.
+
+Transfers use a single reference and two paired ledger legs (source negative, destination positive). A transfer cannot be completed with only one side. Receiving steps may use `IN_TRANSIT` location so that dispatch and receipt are explicit and auditable.
+
+Invariant for a product/location:
+
+`closing_quantity = opening_quantity + Σ all signed stock movements`.
+
+Invariant for a company transfer: sum of source and destination quantities, including in-transit balance, remains conserved (apart from explicit adjustment/loss/sale/purchase events).
+
+### 5.2 Online sale
+
+- Resolve active membership and assigned device/van/location.
+- Validate product active, price snapshot, tax, allowed discount, customer credit limit, tender state and positive quantity.
+- Acquire the relevant inventory balance row lock (`SELECT ... FOR UPDATE`, deterministic product ordering), verify `available = on_hand - reserved_other >= requested`.
+- Determine invoice sequence **at commit**, persist invoice header/lines, stock movement, stock balance decrement, payment record (depending on tender model), audit event and outbox notification in one DB transaction.
+- Commit once, return stable invoice ID, number and receipt payload. If commit result is unknown to device, retry **same** idempotency key.
+
+Do not call external payment processors inside a locked DB transaction. Payment initiation/confirmation uses its own durable state machine and idempotency/reconciliation design.
+
+### 5.3 Offline allowance (critical multi-device rule)
+
+A salesperson must receive a company-approved **device-scoped stock allowance** from online backend before using offline stock. It reserves quantities atomically against the van's inventory. Two devices may use the same van **only** with disjoint reserved allowances. For product P: `sum(active device reservations) <= location on_hand`.
+
+States: `ISSUED -> ACTIVE -> RECONCILING -> EXHAUSTED / RELEASED / EXPIRED_LOCKED`. Offline decrement happens locally within this envelope. On sync, the server validates the allowance, submitted operation IDs and total consumption, decrements authoritative on-hand and its allowance reservation in the same transaction, then records the invoice. Remaining reservation is released only through a safe online handoff or expiry reconciliation; *never release a reservation solely due to wall-clock expiry while an unreachable device may still consider it spendable*. Expired devices stop creating new offline sales, and server retains sufficient stock hold until reconciled or operator resolves exposure.
+
+A device may issue a **provisional sales acknowledgment** offline, clearly not a final tax invoice; global invoice number and tax-invoice artifact are generated only after authoritative server commit. If offline fiscal documentation is operationally required, a separate legally reviewed offline-number allocation and reconciliation mechanism is necessary before release.
+
+Credit sales offline: only if the backend preauthorizes a per-customer offline credit allowance and current risk policy; otherwise cash-only or online approval. BenefitPay/card payment cannot be marked externally verified solely because staff reports it.
+
+## 6. Google Sheets integration — precise design
+
+### 6.1 Separation of Google credentials
+
+**Login:** Firebase Google Sign-In = WHO the user is.
+
+**Sheets connection:** separate, incremental OAuth grant = WHETHER company owner authorizes KANAK to access chosen spreadsheet. Store refresh token encrypted server-side with KMS/envelope encryption. Do not embed OAuth refresh tokens/service-account private keys in APK or workbook. Revoking Google OAuth must degrade sheet sync only, never make already committed transactions disappear.
+
+Google's documented API includes spreadsheet values, batch updates and developer metadata operations. Google Sheets API quotas are presently listed as **300 reads and 300 writes per minute per project; 60 reads and 60 writes per user per project** (subject to Google changes). Batch requests improve quota efficiency but are not database transactions and can be changed by collaborators later.
+
+### 6.2 Workbook per company
+
+Prefer **one company-owned workbook per tenant**. Workbook selection is authenticated through Google's picker/consent; server verifies file access and stores immutable spreadsheet ID. Multiple companies cannot bind to the same writable workbook without an explicit isolation feature (v1 rejects this).
+
+| Tab | Import edits accepted? | Export? | Data authority |
+|---|---|---|---|
+| `Products` | Yes: name, SKU, barcodes, unit, selling price, VAT category, photo URL, active status | Yes | PostgreSQL after validated import |
+| `Customers` | Yes: name, contact, area, address, optional approved credit profile fields | Yes | PostgreSQL after validated import |
+| `Suppliers` | Yes: supplier name, contacts, address | Yes | PostgreSQL after validated import |
+| `Stock_View` | No | Yes | PostgreSQL ledger derived snapshot |
+| `Invoices_View` | No | Yes | PostgreSQL committed invoices |
+| `InvoiceLines_View` | No | Yes | PostgreSQL committed lines |
+| `Payments_View` | No | Yes | PostgreSQL committed payment states |
+| `Transfers_View` | No | Yes | PostgreSQL committed transfers |
+| `Sync_Errors` | No | Yes | Connector diagnostics, no secrets |
+
+**Never** accept sheet edits as authoritative for invoice status, invoice numbering, payment verification, stock on-hand, stock allocation, roles, invitation status, activation codes, ledger entries, audit history or completed purchases.
+
+### 6.3 Product row schema
+
+Columns, stable order and types:
+
+`kanak_product_id | sku | barcodes | name | description | unit | pack_multiplier | selling_price_bhd | vat_code | image_url | active | sync_status | kanak_record_revision | last_synced_at`
+
+- `kanak_product_id`: server-generated stable UUID. New rows leave this blank; importer allocates ID after validation. Row index never identifies a product.
+- `barcodes`: normalized, trimmed, delimiter-separated strings with collision checks. Barcodes preserved as TEXT; leading zeros must survive. A dedicated barcodes tab or normalized JSON representation is preferred if multiple barcodes per item become complex.
+- `selling_price_bhd`: exact decimal text e.g. `1.250`. Reject `1.25x`, negative or excessive scale. Parse locale-aware but normalize canonical decimal; never use binary float.
+- `vat_code`: `STANDARD_10`, `ZERO_RATED`, `EXEMPT` (actual applied tax treatment determined by configured legal category; these are explicit data flags, not inferred from names).
+- `sync_status`: backend-owned `IN_SYNC`, `PENDING_IMPORT`, `CONFLICT`, `INVALID`, `REJECTED`.
+- `kanak_record_revision`: backend-owned positive integer, protected for ordinary editing, but treated as **untrusted input** since owners can override sheet protection.
+- `active=false` is a requested deactivation. Physical deletion/mass missing rows never auto-deletes records; requires explicit confirmation.
+
+### 6.4 Change detection with guaranteed reconciliation path
+
+**Primary:** installable Google Apps Script `onEdit` / onChange hint (subject to Apps Script permissions and quotas) calls a low-trust KANAK `sheet-change-hint` endpoint, passing only opaque connection ID and event details. A hint does **not** authorize a catalog write. Backend always rereads through previously authorized Google API credentials. Rate-limit and deduplicate hints.
+
+**Optional:** Google Drive `files.watch` or change notifications indicate *a file* changed; they do **not** deliver the modified spreadsheet cell and require expiring channel renewal. Re-fetch actual content through Google Sheets API.
+
+**Fallback:** scheduled per-tenant reconciliation (proposed 15–60 minute interval adjusted for quotas, load and plans), plus manual **Sync now**. Audit full-catalog reconciliation at least daily for high-integrity tenants within quota capacity. Neither Apps Script edit triggers nor Drive hints alone may guarantee all formula/API-derived changes; periodically compare normalized content hashes.
+
+**Caution:** Google documents that Apps Script executions and API requests do NOT fire spreadsheet edit triggers. A Store.link-like `sl-version` marker alone is not sufficient for KANAK; optional `kanak_catalog_revision` developer metadata is an acceleration hint, not the authoritative state.
+
+### 6.5 Inbound import algorithm
+
+1. Receive hint / user-request / scheduled check; enqueue job with key `(company_id, spreadsheet_id)`; debounce e.g. 3 seconds and guarantee only one active importer per sheet.
+2. Verify connected grant and exact spreadsheet ID belongs to company. Read required ranges via Sheets `values.batchGet` with explicit requested value formats; use safe parse preserving text/barcodes.
+3. Normalize row fields and calculate deterministic hash over import-controlled columns only. Avoid formulas/volatile values being interpreted as instructions.
+4. Compare against `sheet_row_mappings` record: stable `kanak_product_id`, `last_imported_sheet_hash`, `last_exported_db_revision` and latest DB revision.
+5. If sheet unchanged, skip. If sheet changed and DB didn't change since base, validate and propose/import change inside a DB transaction with product version increment. If both changed, create `sheet_conflicts` and mark `CONFLICT`; never overwrite one side silently.
+6. On validation failure, quarantine that row with exact tab, row, column, error code and safe suggested correction. Do not partially create an unusable product; other independent valid rows may import using per-row atomic transactions with a sync summary.
+7. Publish catalog changes to authorized devices via server change stream; enqueue export of backend-owned revision and sync status back to Sheets.
+8. Export using Sheets batch APIs and `RAW` value input; detect/limit export loops using known export hash and explicit event origin. Errors retry with exponential backoff + jitter; never roll back already committed invoices.
+9. Record sync history: start/end, actor/cause, scanned/changed/imported/rejected/conflicted/exported rows, Google quota errors, last good revision.
+
+**Three-way conflict examples:**
+- Owner edits product price from 1.250 to 1.300, backend still has prior revision -> accept after validation.
+- Manager changes price to 1.400 inside KANAK while owner independently edits sheet to 1.300 -> flag conflict showing both values; owner chooses which one to apply.
+- Sheet row moved from row 20 to row 50 -> stable ID allows match, not duplicate.
+- Owner deletes 200 rows by accident -> mass-delete warning; do not deactivate.
+- `IMPORTRANGE` recalculates without an edit event -> periodic normalized-content reconciliation catches it.
+
+### 6.6 Outbound Sheets export ownership
+
+- `Stock_View`, `Invoices_View`, etc. are **read-only projections**; do not build a two-way merge into those tabs.
+- Export outbox rows are created in the same PostgreSQL transaction as the business change. Worker uses at-least-once retries and stable external reference keys, making exports idempotent even across crashes.
+- Google Sheet updates can lag; the Android app should always show authoritative backend state and a sync staleness indicator.
+- If an owner changes a protected tab, it is ignored for source-of-truth and overwritten on next export; event logged.
+- Batch exports by tenant and object type; respect Google quotas and share grants. Never make invoice commit wait on Google Sheets availability.
+
+### 6.7 Sync status visible to users
+
+`CONNECTED` / `SYNCING` / `IN_SYNC` / `PENDING` / `CONFLICT` / `PERMISSION_REVOKED` / `RATE_LIMITED` / `ERROR` / `PAUSED`.
+
+UI shows last successful import/export UTC+03 time, next scheduled attempt, affected tab, record counts, retry action, and per-row errors; “real-time” is only a target, not a guarantee.
+
+## 7. Android offline and data synchronization
+
+### 7.1 Local database tables
+
+`cached_products`, `cached_customers`, `cached_suppliers`, `cached_vans`, `cached_locations`, `cached_stock_allowances`, `cached_invoices`, `draft_invoices`, `outbox_operations`, `sync_checkpoints`, `local_device_identity`, `print_jobs`.
+
+Local storage is tenant-partitioned; no cached tenant data is exposed after switching company or revoking local access. Encrypt sensitive persisted information and keys where practical, using hardware-backed Android Keystore when available. A recoverable SQLite migration cannot be equivalent to dropping unsynced outbox records.
+
+### 7.2 Outbox lifecycle
+
+`DRAFT -> PENDING_SYNC -> SYNCING -> COMMITTED` or `CONFLICT` / `REJECTED`.
+
+- Allocate immutable UUID idempotency key when user taps **Confirm sale** and persist request payload + hash + device ID + company ID + allowance reference + tentative receipt metadata in Room **before** any network attempt.
+- UI must not execute a second financial sale merely because user taps refresh, returns to screen, rotates device or app process restarts.
+- WorkManager schedules constraints-aware retries and immediate attempts on regained connectivity; execution timing is OS-controlled, not guaranteed to be instantaneous.
+- Server returns stable `server_operation_id`, server invoice number, accepted_at and authoritative stock/credit state.
+- If connectivity drops after server commit but before response, retry original key, get same receipt/response.
+- On conflict, preserve original request and show *reason and explicit resolution action*. Never silently delete or rewrite an invoice.
+- If company/device membership was revoked while offline, server rejects on reconnect. Document accepted offline exposure rules and allow manager incident reconciliation without forged historical invoices.
+
+### 7.3 Change-feed protocol
+
+Each company has monotonically increasing `event_seq` covering committed changes, including tombstones. `GET /v1/sync/changes?cursor=...&limit=...` returns server events filtered by current membership and van assignment, plus `next_cursor`. Gaps, old cursors or permission changes cause full scoped resnapshot. Client applies a page to Room in one local transaction before persisting next cursor. Realtime WebSocket/SSE or FCM only wakes a sync pull; it is never a source of authoritative row contents.
+
+### 7.4 Device clock and time
+
+Server records events in UTC, presenting Asia/Bahrain (UTC+03) timestamps. Daily reports and shift date boundaries use the company's configured timezone, not phone locale or arbitrary UTC midnight. A device's offline timestamp is auxiliary evidence; server acceptance timestamp controls transaction order.
+
+## 8. Exact money and VAT rules
+
+- BHD values have exactly 3 decimal places. Client parsing and server calculation use integers and rational/Decimal arithmetic; no floating-point financial math.
+- Standard VAT rate default 10% for taxable Bahrain products. Explicit zero-rated/exempt categories and future rates must be representable.
+- Selling prices are VAT-inclusive by default, product-specific VAT code is snapshotted at commit.
+- For a sales unit price `price_fils` and quantity `qty_minor` with `quantity_scale=1000`: `line_gross_pre_discount_fils = HALF_UP(price_fils * qty_minor / 1000)`.
+- Apply a valid discount to the line gross, ensuring no negative gross; round according to documented policy to integer fils.
+- For a standard 10% VAT-inclusive discounted line: `vat_fils = HALF_UP(line_gross_after_discount_fils * 10 / 110)`; `net_fils = line_gross_after_discount_fils - vat_fils`.
+- For zero-rated/exempt: VAT=0, but VAT category remains explicit on invoice and reports.
+- Invoice totals equal exact sum of **line-rounded** net, VAT and gross; `sum(net_fils) + sum(vat_fils) = sum(gross_fils)` always.
+- Example: a single 3.300 BHD VAT-inclusive line at 10% produces 3.000 BHD net, 0.300 BHD VAT, 3.300 BHD gross.
+- Refund/credit note references original invoice and uses original line tax treatment and pricing snapshot, with legally reviewed rounding adjustments if needed.
+- Document receipt format for a **full tax invoice versus simplified tax invoice** (depending on Bahrain legal criteria), vendor registration details, date, sequential number, item description, quantities, net, VAT rate/amount, gross, discount, customer details as required. Obtain Bahraini accounting/legal validation of template and retention before launch.
+
+## 9. API boundary and contracts
+
+Base: `https://api.<deployment-domain>/v1`, HTTPS only. JSON with schema validation. Required headers: `Authorization: Bearer <Firebase ID token>`, `X-Company-Id`, `X-Device-Id`, `Idempotency-Key` on mutations when applicable. Backend derives/validates membership; caller headers are selectors only.
+
+### 9.1 Endpoint map
+
+| Resource | Representative endpoints |
+|---|---|
+| Identity | `GET /me`, `GET /me/companies`, `POST /devices/register`, `POST /devices/revoke` |
+| Registration | `POST /company-applications`, `GET /company-applications/{id}` |
+| Activation | `POST /companies/{companyId}/activation/redeem` |
+| Platform admin | `GET /admin/company-applications`, `POST /admin/company-applications/{id}/approve`, `/reject`, `POST /admin/activation-codes` |
+| Membership | `GET /companies/{id}/members`, `POST /companies/{id}/invitations`, `POST /invitations/{token}/accept`, `POST /companies/{id}/members/{uid}/revoke` |
+| Catalog | `GET/POST /companies/{id}/products`, `PATCH /companies/{id}/products/{pid}`, similarly `customers`, `suppliers` |
+| Inventory | `GET /companies/{id}/stock?locationId=`, `POST /companies/{id}/stock/transfers`, `POST /companies/{id}/stock/adjustments`, `POST /companies/{id}/stock/allowances` |
+| Purchasing | `GET/POST /companies/{id}/purchases`, `POST /companies/{id}/purchases/{pid}/receive` |
+| Sales | `POST /companies/{id}/sales/checkout`, `GET /companies/{id}/invoices`, `GET /companies/{id}/invoices/{invoiceId}`, `POST /companies/{id}/invoices/{invoiceId}/void` |
+| Payments & returns | `POST /companies/{id}/invoices/{invoiceId}/payments`, `POST /companies/{id}/returns`, `GET /companies/{id}/credit-notes` |
+| Operations | `GET/POST /companies/{id}/vans`, `POST /companies/{id}/shifts/open`, `POST /companies/{id}/shifts/{id}/close` |
+| Sync | `POST /companies/{id}/offline-operations`, `GET /companies/{id}/sync/changes`, `GET /companies/{id}/sync/snapshot` |
+| Google Sheets | `POST /companies/{id}/google/connect/start`, `/connect/callback`, `/sheets/bind`, `/sheets/sync`, `GET /companies/{id}/sheets/status`, `/sheets/conflicts`, `POST /sheets/conflicts/{conflictId}/resolve` |
+| Reports | `GET /companies/{id}/reports/{reportType}?from=&to=&vanId=&salespersonId=`, `POST /companies/{id}/reports/exports` |
+| Audit | `GET /companies/{id}/audit/events`, `GET /companies/{id}/inventory/reconciliation` |
+
+Public Google OAuth callbacks are handled by a dedicated route with nonce/state validation; not protected by the app's Bearer header in the same way as regular business APIs. Change-hint webhooks have separate low-trust routing, rate limiting and verification.
+
+### 9.2 Example checkout request (illustrative contract)
+
+```json
+{
+  "company_id": "COMPANY_UUID",
+  "van_id": "VAN_UUID",
+  "device_id": "DEVICE_UUID",
+  "customer_id": "CUSTOMER_UUID",
+  "source": "ONLINE",
+  "lines": [
+    {
+      "product_id": "PRODUCT_UUID",
+      "quantity_minor": 2000,
+      "unit_scale": 1000,
+      "expected_product_version": 17,
+      "discount_fils": 0
+    }
+  ],
+  "tenders": [{"method": "CASH", "amount_fils": 6600}],
+  "client_operation_id": "UUID",
+  "client_created_at": "2026-11-06T18:20:00+03:00"
+}
+```
+
+**Server rules:** Price is resolved from current authorized server price rules, not trusted from client. Client's expected version detects stale price; server either rejects for price reconfirmation or applies explicit preapproved price-lock policy. Stock is checked at commit. For offline source, include device allowance IDs and offline signed envelope IDs; a distinct offline endpoint validates assigned allowance.
+
+### 9.3 Example success/error semantics
+
+`201 Created` = newly committed; `200 OK` = idempotent replay of already committed operation; `202 Accepted` = queued non-financial sync task (never falsely assert invoice committed); `409` = conflict; `422` = invalid domain input; `401` = invalid authentication; `403` = permission; `429` = rate limit; `503` = temporary dependency failure.
+
+Error structure:
+
+```json
+{
+  "error": {
+    "code": "INSUFFICIENT_RESERVED_STOCK",
+    "message": "The device has no remaining offline allocation for this product.",
+    "field": "lines[0].quantity_minor",
+    "retryable": false,
+    "correlation_id": "UUID"
+  }
+}
+```
+
+Errors never expose SQL internals, secrets or another tenant's entity details.
+
+## 10. Checkout and payment state machines
+
+### 10.1 Sales flow
+
+`OPEN_CART -> VALIDATING -> CONFIRMING -> COMMITTED -> RECEIPT_READY`; offline `OPEN_CART -> LOCAL_VALIDATION -> PENDING_SYNC -> COMMITTED` or `CONFLICT/REJECTED`.
+
+Posted invoices are immutable. A **VOID** is an authorized reversing transaction and audit entry; a completed return is a separate `CREDIT_NOTE` document tied to original sale. Never edit a posted invoice's lines or quietly reset its status.
+
+### 10.2 Tender and credit
+
+- `CASH`: store tender record, counted cash at shift close; cashier acknowledgment does not prove bank settlement.
+- `BENEFITPAY` or `BANK_TRANSFER`: `REPORTED -> PENDING_VERIFICATION -> VERIFIED / REJECTED` when no certified payment integration exists. Never infer incoming credit from an unchecked screenshot.
+- `CARD`: payment provider states defined only after actual provider integration; no synthetic captures.
+- `CREDIT`: creates/updates customer ledger receivable atomically with sale, controlled by credit limit and permission; collections are independent payment entries with original references.
+- Split tenders allowed, sums must reconcile to gross and change rules.
+
+### 10.3 Pricing changes during checkout
+
+Cart stores local product revision. Online checkout validates server revision: if price changed, show old vs new and require confirmation before final submission (no silent price override). Offline pricing is governed by a time-bounded signed catalog snapshot/allowance policy; otherwise block stale-price sales when disconnected.
+
+## 11. Mobile UX / information architecture
+
+### 11.1 Principles
+
+- First paint is role-specific, **salesperson can start sale with one prominent button**.
+- Avoid 12 bottom tabs; use **five primary bottom destinations:** Home, Sell, Invoices, Products, More.
+- All 12 requested sections remain discoverable in `More` or a navigation drawer: Dashboard; Sales/New Invoice; Invoices; Products; Customers; Inventory; Purchases; Suppliers; Vans; Reports; Team Management; Settings.
+- Persistent, honest sync states: `Online`, `Offline—3 pending`, `Syncing`, `Action required`. Stock shown with explicit `Last updated HH:MM` if cached.
+- Touch targets at least 48dp for primary field actions; responsive layout for 360–600dp width, larger tablet screens, font scaling, Arabic RTL including directional icons, text and numbers.
+- Button labels are verbs: `Add product`, `Confirm sale`, `Load van`, `Print`, `Resolve conflict`; no icon-only critical actions.
+- Use full-screen tasks for invoicing; modal dialogs only for bounded confirmations and quick choices.
+
+### 11.2 Visual tokens (proposed; editable design system)
+
+- Background `#F8FAFC`, surface `#FFFFFF`, primary ink `#0F172A`, secondary ink `#475569`.
+- Primary blue `#2563EB`, success teal `#0F766E`, warning `#B45309`, error `#B91C1C`.
+- Card radius 16dp, field/button radius 12dp, page gutter 16dp, content spacing 8/12/16/24dp; minimum primary button height 52dp; dividers subtle.
+- Typography: system sans via Material typography; English/Arabic fonts chosen for reliable bidi glyph metrics; headings 24sp, section 18sp, body 14–16sp, supporting label 12sp.
+- Numbers: BHD exactly three decimals, tabular numerals where supported; never rely solely on color to signal sync/error.
+- Skeleton loaders only for first load; cached data remains visible with freshness banner during refresh.
+
+### 11.3 Login and company onboarding
+
+**Screen A — Welcome:** KANAK logo, one `Continue with Google` action, privacy notice and English/العربية toggle. No fake email/password path.
+
+**Screen B — Company selector:** company cards with owner/manager/salesperson role, active/suspended status, last visited. `Register company` and `Accept invitation` clearly separated.
+
+**Screen C — New company registration:** 3-step input: business identity (name/CR/TRN), contact/address/timezone, review & submit. Field-level validation; save draft; pending approval view shows state and next steps.
+
+**Screen D — Activation:** 6–12 character code UI (server policy decides format), paste from clipboard, masked submitted state, explicit errors for expired/used/wrong company without revealing too much to attackers.
+
+**Screen E — Owner setup:** create warehouse → add van → connect Sheets (optional) → import products → invite salesperson → pair receipt printer → complete setup.
+
+### 11.4 Dashboard — owner
+
+Header: company selector, greeting, timestamp, notification/sync icon. KPI cards for today's total net/gross/VAT, sales count, outstanding customer credit and pending sync. Graph of daily trend with filter. Below: `New sale`, `Receive purchase`, `Load van`, `Invite staff`; exception list prioritized by failed sync, low stock, unpaid credit, overdue day close. Reporting values always labeled committed vs provisional.
+
+### 11.5 Dashboard — salesperson
+
+Header: assigned van, current shift, connection state and reserved offline SKU count. Primary `New sale` CTA. Four small metrics: own sales today, invoices, collections, remaining sellable allocation. Below: quick customer lookup, resume draft, pending sync operations, stock list, daily close. No company-wide revenue or manager controls.
+
+### 11.6 New Sale — optimized workflow
+
+1. Van selected by assignment (owner may choose); show online/offline stock source and limits.
+2. Customer search (name/phone/reference) or `Cash customer`; optional customer creation only with permission.
+3. Scan barcode through camera only when implemented and permission-granted; searchable manual fallback always available. Lookup SKU/barcode, show price inclusive, available qty, VAT label, unit/pack; add quantities with large stepper.
+4. Cart shows each item, qty, unit, price, discount and total. Totals breakdown: net, VAT, gross. Persistent draft saved with device instance ID.
+5. Payment sheet: cash, credit, approved external tender or split tender; credit limit and amount due visible. Offline cash mode shows provisional warning.
+6. `Confirm sale`: one atomic commit or durable offline queue. Disable duplicate action but retain fixed idempotency key across retries.
+7. Success view: invoice number and time only after server commit; `Print`, `Share PDF`, `New sale`; offline shows unmistakably **PENDING SYNC** and provisional document.
+
+### 11.7 Inventory, van loading, and transfer
+
+Inventory screen tabs: Warehouse, Vans, Movements, Transfers, Adjustments. Search with location filter, available vs reserved vs on-hand quantities, low-stock alerts. Load van: select source warehouse, destination van, SKU quantities, review with stock validation, commit transfer, generate movement reference and audit trail. Offline device allowances displayed separately; staff never sees reserved stock as freely available.
+
+### 11.8 Invoices and customer balances
+
+Invoices: server-backed filters date/van/salesperson/customer/status/payment method; row shows `POSTED`, `VOID` or separate return note; amounts exact 3 decimals. Detail screen shows snapshot, payment history, stock event link, reprint/share, authorized void and return actions. Customers: profile, contacts, credit limit, ledger balance, aged receivables, sales history, collection records. Sensitive credit data hidden from unauthorized roles.
+
+### 11.9 Other screens
+
+Products: search/barcode, stock per location, image, price, tax, active, edit history; sheet sync marker on editable master records.
+Purchases: supplier, lines, landed costs where supported, receive stock, purchase history and attachments.
+Suppliers: contact/account history; salesperson-suggested supplier remains pending approval.
+Vans: list, assign/revoke salesperson, route, status, stock, open shifts, offline allowance.
+Reports: daily/date range, by van, salesperson, customer, product, VAT, tender, stock movement, purchases, returns, unpaid, pending offline and reconciliation exceptions; CSV/PDF exports based on server snapshots.
+Team: invite email, role and van assignment, revoke/re-invite, recent devices and access audit.
+Settings: company, tax, invoice numbering, Sheets connection/status/conflicts, printer, language, offline policy, approvals, audit/backup info and account.
+
+### 11.10 Global UX failure states
+
+| Scenario | UI outcome |
+|---|---|
+| No network, allowance available | Amber `Offline` banner, permitted provisional sales, pending counter |
+| No network, no reserved stock | Explain cannot sell this SKU offline; never invent stock |
+| Google sheet permission revoked | App sales continue; Sheets card shows `Reconnect` |
+| Sheet price conflict | Side-by-side old/backend/sheet values and explicit resolution action |
+| API timed out during checkout | `Checking sale status`; reuse same idempotency key; don't show failed and offer fresh duplicate sale |
+| Staff revoked | Access denied when online; offline risk policy enforced at next sync |
+| Payment unverified | `Awaiting verification`, not `Paid` |
+| Printer disconnected | Invoice remains committed, print queue retry; printing never changes sale status |
+| App process killed after confirmation | Restore pending transaction from Room; reconcile with backend |
+| Server out of service | Drafts/offline permitted only within allowance; cloud-dependent admin actions disabled |
+
+## 12. Bluetooth printing
+
+- Native Android Bluetooth Classic ESC/POS, supported code pages, Arabic printing through tested rasterized text if printer lacks reliable native Arabic charset, QR if needed, 58mm and 80mm templates; printer model compatibility matrix maintained.
+- Pair/connect only through Android permission-compliant flow; persist printer target and last connection status. Do not request unrelated location permissions except where platform/Bluetooth discovery rules necessitate them.
+- Printing is an idempotent **presentation action**, not an invoice commit; repeat printing labels `REPRINT`, timestamp and original invoice reference.
+- Receipt includes business identity, applicable VAT fields, invoice/credit-note number, product lines, tax totals, amount paid/outstanding, and offline provisional disclaimer where necessary.
+
+## 13. Reports and accounting correctness
+
+Every report defines a **grain**, a source table and a timezone window. Daily sales count = count of committed invoice headers (with explicit handling of voids and returns). Revenue = sum of net sale lines less valid credits; VAT output = sum of tax line snapshots less credits. Payments reported separately from invoiced revenue. Credit ledger must reconcile invoices/payments/credit notes. All reports include `generated_at`, filters and `as_of_event_seq` to reproduce a snapshot.
+
+- Summary: daily/monthly sales, collections, VAT, outstanding, returns.
+- Dimensions: date, van, salesperson, customer, product, VAT code, payment method.
+- Operational: stock position/movements, purchases, transfers, return quarantine, offline pending, sheet import conflicts, day-close variances.
+- Exports: UTF-8 CSV with formula-injection safety, PDF receipt/report layouts, request ID and audit event.
+
+## 14. Security architecture
+
+- TLS 1.2+ / modern cipher configuration; HTTPS required, secure origin for OAuth callbacks/webhooks.
+- Verify Firebase ID tokens with correct audience/issuer and expiration; backend checks revoked account state and memberships before sensitive operations. Require reauthentication for high-impact owner changes where appropriate.
+- Google OAuth grant independent of sign-in; encrypted refresh token, least scopes, access revocation flow and rotation handling. Never send Sheets access token to Android or third parties.
+- Row-Level Security plus API permission checks; never select records by guessed ID without company scope.
+- Idempotency key collisions detected by payload hash; replay returns original result, not new sale.
+- Rate limits for sign-in, activation, invitations, Sheets callbacks, imports, checkout and admin.
+- Bound query sizes, pagination, input schemas, file URL validation/allowlist, image content scanning policy, secure report export URLs, CSRF/state protection on OAuth callbacks.
+- No plaintext secrets in app package, logs, crash reports, source repo or Sheets; no staging/production credential mixing.
+- Reconcile staff permission revocations and inventory on reconnect; cache offline authorization expiry explicitly.
+- Audit events append-only with actor, device, tenant, operation, entity before/after hashes or diffs (redact PII), UTC timestamp and correlation ID. Tamper-evidence chained hashes optional but must be verifiable.
+- Backups: off-host encrypted backups with point-in-time recovery if supported, independent access control, automated restore test, retention defined by policy/legal advice. Backups are only complete after proven restore.
+
+## 15. Observability and operations
+
+For each service collect structured logs, traces, queue depth, error rates, DB lock wait, p95/p99 request latency, Google OAuth errors, Google API 429/5xx, import row rejects, dead-letter count, device outbox age, sync lag, failed prints, tenant inventory reconciliation variance, restore test results.
+
+**Initial design targets, not verified SLAs:**
+- Online sale p95 < 1.5 seconds at agreed load test and network baseline (excluding external payment verification/printing).
+- API 5xx rate < 0.5% under agreed normal load.
+- Edit hint to catalog commit p95 < 60s when Google triggers/connectivity are healthy; polling-based changes may take 15–60+ minutes under quota constraints.
+- Device sync pull triggered within seconds of reconnect when OS permits; worker completion time not guaranteed by WorkManager.
+- Zero acknowledged duplicate invoices for identical idempotency keys; zero unaccounted stock divergence across rehearsed failure tests.
+
+## 16. Testing strategy — 17 non-negotiable release gates
+
+| # | Gate | Automated acceptance evidence |
+|---:|---|---|
+| 1 | Database authority | Trace every business mutation; no direct authoritative Sheets/device commits |
+| 2 | Tenant isolation | Cross-company read/write/delete/foreign-key denial tests across endpoints and worker jobs |
+| 3 | Membership | Invite, accept, expire, revoke, re-invite; revoked token denied |
+| 4 | Role enforcement | Salesperson attempts forbidden admin mutations via direct HTTP; 403 |
+| 5 | Multi-van concurrency | Two vans/agents selling overlapping SKUs, unique invoices and consistent stock; stress tests |
+| 6 | Stock conservation | Property-based randomized purchase/transfer/sale/return/adjustment tests reconcile ledger |
+| 7 | Atomic checkout | Inject failure after each persistence operation; no partial invoice/payment/stock |
+| 8 | Idempotency | Duplicate replay incl. restart and response loss returns same invoice; payload mismatch rejected |
+| 9 | Offline recovery | Kill app/device during outbox persistence and sync; recover without loss/duplicate |
+| 10 | Conflict handling | Stale product, invalid allowance, sheet conflict surfaced and resolved explicitly |
+| 11 | Real-time sync | Change stream scoped correctly; delayed/offline devices converge and no wrong-tenant leak |
+| 12 | Report correctness | Recalculate from committed ledger and VAT line snapshots across date/role filters |
+| 13 | Activation security | Wrong/expired/reused code, brute force, race redemption all rejected |
+| 14 | Invitation security | Forged/reused/expired/revoked/mismatched verified email rejected |
+| 15 | Audit logs | Every privileged and financial mutation produces immutable attributable event |
+| 16 | Backup/restore | Restore isolated staging copy to named recovery point; reconcile transactions and schema |
+| 17 | Security | Dependency/scanner checks, static analysis, tenant fuzz tests, secrets scan, penetration checklist, TLS/config testing |
+
+Additionally mandatory: Google Sheets edits through formula/API don't fire trigger -> fallback reconciliation; Google 429 and permission revocation; VAT rounding fixtures; Arabic RTL; BHD 3-place rendering; 58/80mm print tests; signed APK installation tests, upgrade migrations, no mock data/test endpoints in release.
+
+## 17. Implementation order and artifacts
+
+**Phase A — Foundation:** repo/CI, JDK and Android SDK, Gradle Wrapper pinned and verified, backend migrations, model schema, multi-tenant RLS, Firebase identity, activation flows, test fixtures; artifact `kanak-backend` + Android login shell + OpenAPI.
+
+**Phase B — Financial/inventory core:** catalog, location balances, movement ledger, purchases, transfers, stock reservation, invoice checkout, tender state machine, returns/credit notes, finance/property tests; artifact runnable API and integration suite.
+
+**Phase C — Complete Android workflows:** role routing, 12 sections, fast sell/cart, stock, invoices, customers, products, team, reports, Arabic RTL, Bluetooth print, Room schema and migrations; artifact installable internal APK with end-to-end smoke tests.
+
+**Phase D — Offline + Google Sheets:** device allowance + durable outbox, resumable sync feed, connector OAuth, workbook templates, trigger hints, scheduled reconciliation, conflict UI, quota handling, sync diagnostics; artifact fault-injection and sync test report.
+
+**Phase E — Production verification:** 17 gates, capacity/security checks, off-host backup restore rehearsal, environment segregation, release keystore/CI secrets, release build signed with known certificate fingerprint, SHA-256, reproducible build metadata, APK install/upgrade tests on target Android versions; artifact signed APK, release checklist, server deployment record, runbooks, audit evidence.
+
+**Release is blocked** until all mandatory gates have machine-verifiable pass evidence and the target tenant has agreed to operational policies for offline acknowledgment, invoice printing, licensing and financial record retention.
+
+## 18. Explicit non-goals for 1.0.0
+
+No Google Sheet as authoritative database; no speculative bank credit verification; no untested payment gateway; no public sign-up without platform activation; no autonomous role grants; no hidden stock edits; no silent invoice renumbering; no independent local-final invoice without server reconciliation; no extra CRM/ecommerce modules unless separately approved; no promise of strong realtime latency while disconnected.
+
+## 19. Decisions from published platform documentation (checked 2026-11-06)
+
+1. Google Sheets API per-minute usage limits: https://developers.google.com/workspace/sheets/api/limits
+2. Google Apps Script installable trigger restrictions: https://developers.google.com/apps-script/guides/triggers/installable
+3. Google Sheets developer metadata: https://developers.google.com/workspace/sheets/api/guides/metadata
+4. Google Sheets API batching and atomicity: https://developers.google.com/workspace/sheets/api/guides/batch
+5. Google Drive change-watch notifications and expiry: https://developers.google.com/workspace/drive/api/guides/push
+6. Firebase Android Google Sign-In through Credential Manager: https://firebase.google.com/docs/auth/android/google-signin
+7. Firebase backend ID token verification: https://firebase.google.com/docs/auth/admin/verify-id-tokens
+8. Android WorkManager persistent background work: https://developer.android.com/reference/androidx/work/WorkManager
+9. Bahrain VAT law and executive invoice requirements: https://www.lloc.gov.bh/Legislation/HTM/RFNE1218
+
+**Evidence boundary:** Store.link APK findings in the preceding conversation support a dashboard backend with sync endpoints and Google OAuth scopes. Store.link's unreleased backend code, exact Google Sheets API invocation sequence, consistency guarantees and caching/database design have not been established. KANAK's architecture above is independently specified rather than an unsupported claim that Store.link implements the same internals.
+
+---
+
+### Design quality checklist (before coding)
+
+- [ ] Owner approves Sheets data ownership boundary and permitted editable columns.
+- [ ] Accountant approves Bahrain tax invoice, simplified invoice, credit note, pricing, discount and offline receipt policy.
+- [ ] Company admin approves offline credit/risk, device allowance expiry and lost-device handling.
+- [ ] Roles/capabilities verified against actual business staff scenarios.
+- [ ] Google consent scopes, project verification and quota budgeting documented.
+- [ ] Data dictionary and API schema generated and validated from models.
+- [ ] Security threat model includes revoked staff, compromised device, Sheets revocation, duplicate sale, malicious spreadsheet and lost network response.
+- [ ] Every claimed passing acceptance gate linked to executed test and build commit.

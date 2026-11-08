@@ -66,7 +66,7 @@ fun AddEditProductScreen(
     var costPriceStr by remember(existing) { mutableStateOf(existing?.costPrice?.toPlainString() ?: "") }
     var sellingPriceStr by remember(existing) { mutableStateOf(existing?.sellingPrice?.toPlainString() ?: "") }
     var vatRateDropdownExpanded by remember { mutableStateOf(false) }
-    var selectedVatRate by remember(existing) { mutableStateOf(existing?.vatRate ?: BigDecimal("0.10")) }
+    var selectedVatRate by remember(existing) { mutableStateOf(existing?.vatRate ?: repository.getConfiguredVatRate()) }
 
     var manualPhotoUrl by remember(existing) { mutableStateOf(existing?.photoUrl) }
     var isManualOverride by remember(existing) {
@@ -475,8 +475,9 @@ fun AddEditProductScreen(
                     expanded = vatRateDropdownExpanded,
                     onExpandedChange = { vatRateDropdownExpanded = !vatRateDropdownExpanded }
                 ) {
+                    val configuredPercent = repository.getConfiguredVatPercentage().toPlainString()
                     OutlinedTextField(
-                        value = if (selectedVatRate > BigDecimal.ZERO) "% 10% (Standard)" else "% 0% (Zero-rated)",
+                        value = if (selectedVatRate > BigDecimal.ZERO) "% ${BahrainFinancials.rateToPercentage(selectedVatRate).toPlainString()}% (Configured VAT)" else "% 0% (Zero-rated)",
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("VAT Rate") },
@@ -494,9 +495,9 @@ fun AddEditProductScreen(
                         onDismissRequest = { vatRateDropdownExpanded = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("10% (Standard Bahrain VAT)") },
+                            text = { Text("$configuredPercent% (Configured Standard Bahrain VAT)") },
                             onClick = {
-                                selectedVatRate = BigDecimal("0.10")
+                                selectedVatRate = repository.getConfiguredVatRate()
                                 vatRateDropdownExpanded = false
                             }
                         )

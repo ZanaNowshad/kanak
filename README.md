@@ -1,47 +1,44 @@
-# KANAK — Bahrain FMCG Van Sales Application
+# KANAK — Bahrain FMCG Van Sales & Fleet POS Application
 
-**Kanak** is a production-grade native Android application designed specifically for wholesale FMCG van sales operations in the Kingdom of Bahrain.
-
----
-
-## Key Highlights
-
-- **Authoritative Google Sheets Datastore:** 8 worksheets (`Products`, `Customers`, `Suppliers`, `Purchases`, `Invoices`, `InvoiceLines`, `StockAdjustments`, `Users`) connected via a trusted Google Apps Script Gateway.
-- **Bahrain Currency & VAT:** Exact 3-decimal BHD arithmetic using `BigDecimal`. Automatic 10% standard VAT derivation from VAT-inclusive pricing, zero-rated product support, and guaranteed line-to-header reconciliation.
-- **Primary Van Sales Workflow:** One fluid sequence:
-  `Select Customer → Add Products → Set Quantities → Review Live Totals → Save → Print Thermal Receipt`.
-- **Automatic Product Photography:** Canonical Bing thumbnail candidate URL generator (`barcode + " " + product_name`), with manual URL paste and Android Photo Picker image upload.
-- **ESC/POS Bluetooth Thermal Printing:** Mobile receipt printing on 58mm/80mm thermal printers via standard Bluetooth SPP, with monospace receipt preview, retry capabilities, and reprint actions.
-- **Role Enforcement:** Server-enforced permissions distinguishing `admin` (purchases, stock adjustments, invoice voiding) from `standard` van sales drivers.
-- **Apple-Inspired Design:** Clean system typography, restrained color palette, generous spacing, and touch-down feedback.
+**'Kanak' by zedosai.com** is a native Android application designed specifically for wholesale FMCG van sales and distribution operations in the Kingdom of Bahrain.
 
 ---
 
-## Project Structure
+## Production Features
 
-```text
-Kanak/
-├── app/
-│   ├── src/main/java/com/example/
-│   │   ├── MainActivity.kt
-│   │   ├── auth/                # Credential Manager Google Sign-In & Session
-│   │   ├── domain/              # Product, Customer, Invoice, BHD Financials
-│   │   ├── data/                # Remote API, Repository, and Offline Caching
-│   │   ├── images/              # Canonical Bing Thumbnail Builder & Picker
-│   │   ├── printing/            # Bluetooth SPP Manager & ESC/POS Renderer
-│   │   └── ui/                  # Compose UI (Dashboard, Invoices, Catalogue, Stock)
-│   └── src/test/java/           # Financial, Image, and Printing Unit Tests
-├── apps-script/                 # Production Google Apps Script Web App Gateway
-└── docs/                        # Complete setup, schema, and security documentation
+- **Multi-Tenant Fleet Architecture:** Independent business isolation with Central Warehouse inventory, individual delivery van tracking (`VAN-001`, `VAN-002`, etc.), salesperson driver assignment, and van stock replenishment/reconciliation.
+- **Enterprise Employee Access:** Role-Based Access Control (`ROLE_OWNER`, `ROLE_MANAGER`, `ROLE_SALESPERSON`) with cryptographic employee invitation codes (`KNK-XXXX`) allowing team members to join existing licensed businesses without duplicate licensing fees.
+- **Dual-Layer Persistence & Offline Capability:** Full on-device SQLite caching powered by Android Jetpack Room with automatic offline sale recording, coupled with real-time Firebase Firestore cloud backup and Google Sheets sync.
+- **Authoritative Google Sheets Datastore:** 8 worksheets (`Products`, `Customers`, `Suppliers`, `Purchases`, `Invoices`, `InvoiceLines`, `StockAdjustments`, `Users`) connected via a trusted Google Apps Script Web App Gateway.
+- **Bahrain Currency & VAT:** Exact 3-decimal BHD arithmetic using `BigDecimal`. Automatic 10% standard Bahrain VAT derivation with zero-rated and credit invoice support, line-to-header balance reconciliation, and live daily sales summary reporting.
+- **Primary Van Sales Workflow:** Fluid single-flow sequence:
+  `Select Customer → Add Products → Set Quantities → Review Live Totals (Cash/Credit) → Save → Print ESC/POS Thermal Receipt`.
+- **Customer Credit & Debt Ledger:** Customer detail view with historical purchases, credit balances, and inline bill payment processing for unpaid invoices.
+- **Hardware Integration:**
+  - Real Bluetooth RFCOMM Serial Port Profile (SPP) connection to standard 58mm and 80mm ESC/POS thermal printers.
+  - Native Android PDF Print Framework (`PrintManager`) for wireless network/office receipt printing.
+  - Zero-permission Android Photo Picker for product images with automated Bing thumbnail URL resolution.
+- **Licensing & Verification:** Company registration with CR/TRN validation, SHA-256 activation key generation, offline key storage, and master admin WhatsApp (`+97333050666`) / Email (`zanabalmuhamed@gmail.com`) direct approval integration.
+
+---
+
+## Configuration & Environment Variables
+
+| Variable | Description | Location |
+| :--- | :--- | :--- |
+| `APPS_SCRIPT_GATEWAY_URL` | Google Apps Script Web App URL for Google Sheets datastore sync. | Configured via `.env`, AI Studio Secrets, or in-app **Settings > Datastore Gateway**. |
+| `GEMINI_API_KEY` | (Optional) Gemini API key for smart product cataloging. | Configured via AI Studio Secrets. |
+
+---
+
+## Building the Application
+
+Compile and build the release and debug APKs:
+```bash
+# Debug APK
+gradle assembleDebug
+
+# Release APK
+gradle assembleRelease
 ```
-
----
-
-## Quick Start
-
-1. **Build & Run:** Open the project in Android Studio or compile with Gradle:
-   ```bash
-   gradle assembleDebug
-   ```
-2. **Demo Accounts:** On first launch, tap **Admin Role** or **Sales Driver** to explore all features immediately with pre-loaded Bahrain FMCG inventory (Almarai milk, Tiffany biscuits, Lurpak butter, Rani juice).
-3. **Connect Google Sheets:** Follow `/docs/GOOGLE_SETUP.md` to deploy your Apps Script Web App and enter the URL in **Settings**.
+Outputs are generated in `app/build/outputs/apk/` and `/.build-outputs/`.

@@ -53,8 +53,9 @@ service cloud.firestore {
 
     // Company Registrations & License Activation Requests
     match /company_registrations/{requestId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated();
+      allow read: if true;
+      allow create: if request.resource.data.requestId == requestId;
+      allow update: if isAuthenticated();
       allow delete: if false;
     }
   }

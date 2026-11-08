@@ -1,19 +1,21 @@
 package com.example.ui.theme
 
+import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 
-// Light Color Scheme explicitly matching Board 1 to Board 9
-private val KanakLightColorScheme = lightColorScheme(
+val KanakLightColorScheme = lightColorScheme(
     primary = KanakPrimaryBlue,
     onPrimary = Color.White,
     primaryContainer = KanakAccentLight,
     onPrimaryContainer = KanakPrimaryBlue,
-    secondary = KanakSecondaryText,
-    onSecondary = Color.White,
     background = KanakBackground,
     onBackground = KanakPrimaryText,
     surface = KanakSurface,
@@ -21,16 +23,13 @@ private val KanakLightColorScheme = lightColorScheme(
     surfaceVariant = KanakSurfaceVariant,
     onSurfaceVariant = KanakSecondaryText,
     outline = KanakDivider,
-    outlineVariant = KanakDivider,
     error = KanakError,
-    onError = Color.White,
-    errorContainer = KanakErrorBackground,
-    onErrorContainer = KanakError
+    onError = Color.White
 )
 
 @Composable
 fun KanakTheme(
-    darkTheme: Boolean = false, // Always enforce the official Light Theme from the 9 design boards!
+    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
@@ -38,4 +37,13 @@ fun KanakTheme(
         typography = Typography,
         content = content
     )
+}
+
+@Composable
+fun MyApplicationTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    dynamicColor: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    KanakTheme(darkTheme = darkTheme, content = content)
 }

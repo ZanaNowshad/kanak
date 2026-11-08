@@ -39,6 +39,8 @@ import com.example.kanak.auth.GoogleAuthManager
 import com.example.kanak.licensing.CompanyProfile
 import com.example.kanak.licensing.LicenseManager
 import com.example.kanak.licensing.LicenseState
+import com.example.kanak.ui.components.KanakBrandLoadingDialog
+import com.example.kanak.ui.components.KanakBrandInlineLoading
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -62,9 +64,7 @@ fun AuthScreen(
     val scrollState = rememberScrollState()
 
     var selectedTab by remember {
-        mutableStateOf(
-            if (licenseState == LicenseState.UNREGISTERED) LandingTab.REGISTER else LandingTab.SIGN_IN
-        )
+        mutableStateOf(LandingTab.SIGN_IN)
     }
 
     // Registration Form State
@@ -314,11 +314,10 @@ fun AuthScreen(
                         }
 
                         if (authState is AuthState.Loading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .testTag("auth_loading_indicator"),
-                                color = KanakPrimaryBlue
+                            KanakBrandInlineLoading(
+                                text = "Authenticating with Google Account...",
+                                size = 32.dp,
+                                modifier = Modifier.testTag("auth_loading_indicator")
                             )
                         } else {
                             Button(
@@ -690,7 +689,7 @@ fun AuthScreen(
                                 activationErrorMessage = null
                                 isActivatingCode = true
                                 scope.launch {
-                                    val res = licenseManager.activateLicense(enteredActivationCode.trim())
+                                    val res: Result<Boolean> = licenseManager.validateAndActivate(enteredActivationCode.trim())
                                     isActivatingCode = false
                                     res.onSuccess {
                                         activationSuccessMessage = "License successfully unlocked! You can now sign in with Google."
@@ -790,6 +789,18 @@ fun AuthScreen(
                     textAlign = TextAlign.Center
                 )
             }
+        }
+        if (isSubmittingReg) {
+            KanakBrandLoadingDialog(
+                message = "Submitting Company Registration...",
+                subMessage = "Registering with KANAK Wholesale Bahrain Ledger"
+            )
+        }
+        if (isActivatingCode) {
+            KanakBrandLoadingDialog(
+                message = "Verifying Activation Code...",
+                subMessage = "Cryptographic Key Authorization"
+            )
         }
     }
 }

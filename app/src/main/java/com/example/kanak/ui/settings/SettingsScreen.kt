@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -26,16 +27,21 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.kanak.auth.GoogleAuthManager
 import com.example.kanak.data.repository.KanakRepository
+import com.example.kanak.data.sync.SalesSyncBackgroundService
+import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.domain.models.User
 import com.example.kanak.licensing.LicenseManager
 import com.example.kanak.printing.BluetoothPrinterManager
 import com.example.kanak.printing.EscPosReceiptRenderer
 import com.example.kanak.printing.PrintResult
+import com.example.kanak.printing.PrinterConnectionState
 import com.example.kanak.printing.PrinterDevice
+import com.example.kanak.ui.components.KanakBrandLoadingDialog
 import com.example.kanak.ui.components.KanakConfirmDialog
 import com.example.kanak.ui.components.KanakTopBar
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
+import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -56,6 +62,11 @@ fun SettingsScreen(
     onNavigateBack: () -> Unit,
     licenseManager: LicenseManager? = null,
     onNavigateToAdminLicensePortal: (() -> Unit)? = null,
+    onNavigateToFleet: (() -> Unit)? = null,
+    onNavigateToTeam: (() -> Unit)? = null,
+    onNavigateToDailySummary: (() -> Unit)? = null,
+    onNavigateToJoinBusiness: (() -> Unit)? = null,
+    onNavigateToSystemDiagnostics: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var subView by remember { mutableStateOf(SettingsSubView.MAIN) }
@@ -73,6 +84,11 @@ fun SettingsScreen(
                 onNavigateToPrinters = { subView = SettingsSubView.PAIRED_PRINTERS },
                 onNavigateToConfigError = { subView = SettingsSubView.CONFIG_ERROR },
                 onNavigateToAdminLicensePortal = onNavigateToAdminLicensePortal,
+                onNavigateToFleet = onNavigateToFleet,
+                onNavigateToTeam = onNavigateToTeam,
+                onNavigateToDailySummary = onNavigateToDailySummary,
+                onNavigateToJoinBusiness = onNavigateToJoinBusiness,
+                onNavigateToSystemDiagnostics = onNavigateToSystemDiagnostics,
                 onRequestSignOut = { showSignOutDialog = true },
                 onNavigateBack = onNavigateBack,
                 modifier = modifier
@@ -140,6 +156,11 @@ private fun MainSettingsView(
     onNavigateBack: () -> Unit,
     licenseManager: LicenseManager? = null,
     onNavigateToAdminLicensePortal: (() -> Unit)? = null,
+    onNavigateToFleet: (() -> Unit)? = null,
+    onNavigateToTeam: (() -> Unit)? = null,
+    onNavigateToDailySummary: (() -> Unit)? = null,
+    onNavigateToJoinBusiness: (() -> Unit)? = null,
+    onNavigateToSystemDiagnostics: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
@@ -149,10 +170,14 @@ private fun MainSettingsView(
         licenseManager?.isMasterAdmin(currentUser.email) == true || currentUser.email.equals(LicenseManager.MASTER_ADMIN_EMAIL, ignoreCase = true)
     }
 
+    val context = LocalContext.current
     var gatewayUrl by remember { mutableStateOf(repository.getGatewayUrl() ?: "") }
     var bizName by remember { mutableStateOf(repository.getBusinessName()) }
     var bizAddr by remember { mutableStateOf(repository.getBusinessAddress()) }
     var bizVat by remember { mutableStateOf(repository.getVatNumber()) }
+    var configuredVatStr by remember { mutableStateOf(repository.getConfiguredVatPercentage().toPlainString()) }
+    var isSalesSyncing by remember { mutableStateOf(false) }
+    var salesSyncStatus by remember { mutableStateOf<String?>(null) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
     var isSyncing by remember { mutableStateOf(false) }
 
@@ -216,7 +241,7 @@ private fun MainSettingsView(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = currentUser.displayName.ifBlank { "Ahmed Hussain" },
+                            text = currentUser.displayName,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
                         )
                         Text(
@@ -335,6 +360,171 @@ private fun MainSettingsView(
                             style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
                         )
                     }
+                }
+            }
+
+            // Multi-Van Fleet Operations Card (Admins / Owners / Managers)
+            if (currentUser.isOwner || currentUser.isManager || isMaster) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToFleet?.invoke() },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = KanakSurface),
+                    border = CardDefaults.outlinedCardBorder()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(KanakAccentLight),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.LocalShipping, contentDescription = null, tint = KanakPrimaryBlue)
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Fleet & Van Management",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                            )
+                            Text(
+                                text = "Active vans, driver assignments & stock transfers",
+                                style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                            )
+                        }
+
+                        Icon(Icons.Default.ChevronRight, contentDescription = "Open", tint = KanakSecondaryText)
+                    }
+                }
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToTeam?.invoke() },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = KanakSurface),
+                    border = CardDefaults.outlinedCardBorder()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFFFEF3C7)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Group, contentDescription = null, tint = Color(0xFFD97706))
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Team & Employee Access",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                            )
+                            Text(
+                                text = "Staff invitations, roles and van permissions matrix",
+                                style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                            )
+                        }
+
+                        Icon(Icons.Default.ChevronRight, contentDescription = "Open", tint = KanakSecondaryText)
+                    }
+                }
+
+                // System Diagnostics & Health Telemetry Card
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToSystemDiagnostics?.invoke() },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = KanakSurface),
+                    border = CardDefaults.outlinedCardBorder()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(KanakAccentLight),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Terminal, contentDescription = null, tint = KanakPrimaryBlue)
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "System Diagnostics & Health",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                            )
+                            Text(
+                                text = "Room database status, WorkManager queue & sync telemetry",
+                                style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                            )
+                        }
+
+                        Icon(Icons.Default.ChevronRight, contentDescription = "Open", tint = KanakSecondaryText)
+                    }
+                }
+            }
+
+            // Daily Sales Summary CTA Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onNavigateToDailySummary?.invoke() },
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = KanakSurface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(KanakSuccessBackground),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.ReceiptLong, contentDescription = null, tint = KanakSuccess)
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Daily Sales Summary & VAT",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                        )
+                        Text(
+                            text = "Route sales, cash vs credit & Bahrain 10% VAT breakdown",
+                            style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                        )
+                    }
+
+                    Icon(Icons.Default.ChevronRight, contentDescription = "Open", tint = KanakSecondaryText)
                 }
             }
 
@@ -486,6 +676,281 @@ private fun MainSettingsView(
                             Text("Save URL")
                         }
                     }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = KanakDivider)
+
+                    // Background Synchronization Service Section (Firestore -> Sheets)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Background Sales Sync (Cloud -> Sheets)",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                            )
+                            Text(
+                                text = "Pushes completed sales records from Firestore to the authoritative spreadsheet",
+                                style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                            )
+                        }
+                    }
+
+                    if (salesSyncStatus != null) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = KanakAccentLight,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = salesSyncStatus ?: "",
+                                style = MaterialTheme.typography.bodySmall.copy(color = KanakPrimaryBlue, fontWeight = FontWeight.SemiBold),
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    isSalesSyncing = true
+                                    salesSyncStatus = "Triggering sync of Firestore sales to Sheets..."
+                                    val res = repository.pushFirestoreSalesToGoogleSheets()
+                                    isSalesSyncing = false
+                                    res.onSuccess { count ->
+                                        salesSyncStatus = "$count completed sales pushed to Google Sheets successfully!"
+                                    }.onFailure { err ->
+                                        salesSyncStatus = "Sync warning: ${err.message}"
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("push_sales_to_sheets_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            enabled = !isSalesSyncing && gatewayUrl.isNotBlank()
+                        ) {
+                            if (isSalesSyncing) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Push Sales")
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                SalesSyncBackgroundService.startSync(context)
+                                salesSyncStatus = "Background sync service active: processing completed sales queue."
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("start_background_sync_service_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Run Service")
+                        }
+                    }
+                }
+            }
+
+            // Bahrain VAT Configuration Card (Admin Configurable)
+            val previewVatRate = remember(configuredVatStr) {
+                val pct = try { BigDecimal(configuredVatStr.trim()) } catch (_: Exception) { BigDecimal("10.00") }
+                BahrainFinancials.percentageToRate(pct)
+            }
+            val previewCalc = remember(previewVatRate) {
+                BahrainFinancials.calculateLine(
+                    qty = BigDecimal.ONE,
+                    unitPrice = BigDecimal("1.100"),
+                    vatRate = previewVatRate
+                )
+            }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("bahrain_vat_settings_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = KanakSurface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(KanakAccentLight),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Percent, contentDescription = null, tint = KanakPrimaryBlue, modifier = Modifier.size(20.dp))
+                            }
+                            Column {
+                                Text(
+                                    text = "Bahrain VAT Configuration",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                                )
+                                Text(
+                                    text = "National Bureau for Revenue (NBR) Tax Compliance",
+                                    style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (currentUser.isAdmin || isMaster) KanakAccentLight else KanakSurfaceVariant
+                        ) {
+                            Text(
+                                text = if (currentUser.isAdmin || isMaster) "Admin Edit" else "Fleet Rate",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (currentUser.isAdmin || isMaster) KanakPrimaryBlue else KanakSecondaryText
+                                ),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Configures the fleet-wide Bahrain VAT percentage. All product gross-to-net tax derivations, 3-decimal BHD roundings, and official invoices use this rate.",
+                        style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText)
+                    )
+
+                    if (currentUser.isAdmin || isMaster) {
+                        OutlinedTextField(
+                            value = configuredVatStr,
+                            onValueChange = { input ->
+                                if (input.all { it.isDigit() || it == '.' }) {
+                                    configuredVatStr = input
+                                }
+                            },
+                            label = { Text("Standard VAT Rate (%)") },
+                            placeholder = { Text("10.00") },
+                            trailingIcon = { Text("%", modifier = Modifier.padding(end = 12.dp), fontWeight = FontWeight.Bold) },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("vat_percentage_input"),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+
+                        // Quick Presets
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = configuredVatStr == "10.00" || configuredVatStr == "10",
+                                onClick = { configuredVatStr = "10.00" },
+                                label = { Text("10% Standard") },
+                                modifier = Modifier.testTag("vat_preset_10")
+                            )
+                            FilterChip(
+                                selected = configuredVatStr == "5.00" || configuredVatStr == "5",
+                                onClick = { configuredVatStr = "5.00" },
+                                label = { Text("5% Concessional") },
+                                modifier = Modifier.testTag("vat_preset_5")
+                            )
+                            FilterChip(
+                                selected = configuredVatStr == "0.00" || configuredVatStr == "0",
+                                onClick = { configuredVatStr = "0.00" },
+                                label = { Text("0% Zero-Rated") },
+                                modifier = Modifier.testTag("vat_preset_0")
+                            )
+                        }
+
+                        // Live calculation demo
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = KanakSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = "Exact Tax Math Preview (BHD 1.100 inclusive item):",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                                )
+                                Text(
+                                    text = "Gross Total: ${BahrainFinancials.formatBhd(previewCalc.gross)}  ·  Net (ex-tax): ${BahrainFinancials.formatBhd(previewCalc.net)}",
+                                    style = MaterialTheme.typography.bodySmall.copy(color = KanakPrimaryText)
+                                )
+                                Text(
+                                    text = "Derived VAT (${configuredVatStr.ifBlank { "0" }}%): ${BahrainFinancials.formatBhd(previewCalc.vatAmount)}  [Net + VAT == Gross]",
+                                    style = MaterialTheme.typography.bodySmall.copy(color = KanakSuccess, fontWeight = FontWeight.SemiBold)
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                val rateNum = try {
+                                    BigDecimal(configuredVatStr.trim())
+                                } catch (_: Exception) {
+                                    BigDecimal("10.00")
+                                }
+                                repository.setConfiguredVatPercentage(rateNum)
+                                saveMessage = "Bahrain standard VAT percentage updated to ${rateNum.toPlainString()}% across all sales."
+                            },
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .testTag("save_vat_rate_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue)
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Save VAT Percentage")
+                        }
+                    } else {
+                        // Driver view (Read-only)
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = KanakSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "Active Bahrain VAT Rate",
+                                        style = MaterialTheme.typography.labelSmall.copy(color = KanakSecondaryText)
+                                    )
+                                    Text(
+                                        text = "${repository.getConfiguredVatPercentage().toPlainString()}% Standard VAT",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                                    )
+                                }
+                                Text(
+                                    text = "Managed by Admin",
+                                    style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -550,7 +1015,28 @@ private fun MainSettingsView(
                 }
             }
 
-            // Testing Role Switcher
+            // Database & Local Storage Management
+            val productsCount by repository.products.collectAsState()
+            val customersCount by repository.customers.collectAsState()
+            val invoicesCount by repository.invoices.collectAsState()
+            var showClearConfirm by remember { mutableStateOf(false) }
+
+            if (showClearConfirm) {
+                KanakConfirmDialog(
+                    title = "Clear Local Database?",
+                    message = "This will remove all locally cached products, customers, and invoices on this device. You can re-sync from your Google Sheet at any time.",
+                    confirmText = "Clear Database",
+                    cancelText = "Keep Data",
+                    isDestructive = true,
+                    onConfirm = {
+                        repository.resetToEmptyProductionDatabase()
+                        showClearConfirm = false
+                        saveMessage = "Local database cleared to empty production state."
+                    },
+                    onDismiss = { showClearConfirm = false }
+                )
+            }
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -564,11 +1050,11 @@ private fun MainSettingsView(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "Role Testing & Simulation",
+                        text = "Database & Offline Storage",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
                     )
                     Text(
-                        text = "Toggle permissions for testing admin actions (e.g. Purchase reversions, Voiding, Master editing):",
+                        text = "Local Cache: ${productsCount.size} Products · ${customersCount.size} Customers · ${invoicesCount.size} Invoices",
                         style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText)
                     )
                     Row(
@@ -576,18 +1062,28 @@ private fun MainSettingsView(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { authManager.signInAsDemo(asAdmin = true) },
+                            onClick = {
+                                scope.launch {
+                                    val res = repository.fetchAllFromGateway()
+                                    saveMessage = if (res.isSuccess) "Synced successfully from Google Sheet!" else "Sync error: ${res.exceptionOrNull()?.message}"
+                                }
+                            },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Text("Switch to Admin")
+                            Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Sync Sheet")
                         }
                         OutlinedButton(
-                            onClick = { authManager.signInAsDemo(asAdmin = false) },
+                            onClick = { showClearConfirm = true },
                             modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = KanakError)
                         ) {
-                            Text("Switch to Driver")
+                            Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Clear Cache")
                         }
                     }
                 }
@@ -666,6 +1162,13 @@ private fun MainSettingsView(
 
             Spacer(modifier = Modifier.height(32.dp))
         }
+
+        if (isSyncing) {
+            KanakBrandLoadingDialog(
+                message = "Synchronizing with Google Sheets...",
+                subMessage = "Authoritative Cloud Bi-Directional Master Sync"
+            )
+        }
     }
 }
 
@@ -679,18 +1182,30 @@ private fun PairedPrintersView(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val scope = rememberCoroutineScope()
     val pairedPrinters by printerManager.pairedPrinters.collectAsState()
+    val discoveredPrinters by printerManager.discoveredPrinters.collectAsState()
     val selectedPrinter by printerManager.selectedPrinter.collectAsState()
-    val displayPrinters = pairedPrinters
+    val isDiscovering by printerManager.isDiscovering.collectAsState()
+    val connectionState by printerManager.connectionState.collectAsState()
+
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var testingAddress by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
             KanakTopBar(
-                title = "Paired Printers",
-                onBack = onNavigateBack,
+                title = "Bluetooth Printers",
+                onBack = {
+                    printerManager.stopDiscovery()
+                    onNavigateBack()
+                },
                 actions = {
-                    IconButton(onClick = { printerManager.refreshPairedPrinters() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Scan", tint = KanakPrimaryBlue)
+                    IconButton(onClick = {
+                        printerManager.refreshPairedPrinters()
+                        statusMessage = "Refreshed paired Bluetooth devices"
+                    }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = KanakPrimaryBlue)
                     }
                 }
             )
@@ -736,32 +1251,112 @@ private fun PairedPrintersView(
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Connect a Bluetooth Printer",
+                            text = "ESC/POS Thermal Printers",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Pair your mobile thermal printer via Bluetooth to print invoices instantly from the van.",
+                            text = "Discover and connect standard 58mm/80mm Bluetooth receipt printers for van sales receipts.",
                             style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText)
                         )
                     }
                 }
             }
 
-            // Scan / Refresh Button
-            Button(
-                onClick = { printerManager.refreshPairedPrinters() },
+            // Discovery and Refresh Controls
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Icon(Icons.Default.Search, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Scan for Printers", fontWeight = FontWeight.SemiBold)
+                if (!isDiscovering) {
+                    Button(
+                        onClick = {
+                            val started = printerManager.startDiscovery()
+                            if (!started) {
+                                statusMessage = "Bluetooth scanning initiated. Ensure Bluetooth is turned on and granted."
+                            } else {
+                                statusMessage = "Scanning for nearby ESC/POS thermal printers..."
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("start_bluetooth_discovery_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue)
+                    ) {
+                        Icon(Icons.Default.BluetoothSearching, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Discover Nearby", fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            printerManager.stopDiscovery()
+                            statusMessage = "Discovery scan stopped."
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("stop_bluetooth_discovery_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = KanakWarning)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Stop Scanning", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        printerManager.refreshPairedPrinters()
+                        statusMessage = "Refreshed paired devices list"
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.testTag("refresh_paired_printers_button")
+                ) {
+                    Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Refresh")
+                }
             }
 
+            // Real-time Connection Status Banner
+            if (statusMessage != null) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (statusMessage!!.contains("fail", ignoreCase = true) || statusMessage!!.contains("error", ignoreCase = true)) {
+                        KanakErrorBackground
+                    } else {
+                        KanakAccentLight
+                    },
+                    border = CardDefaults.outlinedCardBorder(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (statusMessage!!.contains("fail", ignoreCase = true)) Icons.Default.Warning else Icons.Default.Info,
+                            contentDescription = null,
+                            tint = if (statusMessage!!.contains("fail", ignoreCase = true)) KanakError else KanakPrimaryBlue
+                        )
+                        Text(
+                            text = statusMessage ?: "",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = if (statusMessage!!.contains("fail", ignoreCase = true)) KanakError else KanakPrimaryBlue,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
+            // SECTION 1: PAIRED PRINTERS
             Text(
-                text = "AVAILABLE PRINTERS (${displayPrinters.size})",
+                text = "PAIRED PRINTERS (${pairedPrinters.size})",
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontWeight = FontWeight.Bold,
                     color = KanakSecondaryText,
@@ -769,72 +1364,262 @@ private fun PairedPrintersView(
                 )
             )
 
-            // Printer list cards
-            displayPrinters.forEach { dev ->
-                val isSelected = selectedPrinter?.address == dev.address || (selectedPrinter == null && dev == displayPrinters.first())
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onSelectPrinterForDetail(dev) },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = KanakSurface),
-                    border = if (isSelected) {
-                        androidx.compose.foundation.BorderStroke(1.5.dp, KanakPrimaryBlue)
-                    } else {
-                        CardDefaults.outlinedCardBorder()
-                    }
+            if (pairedPrinters.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = KanakSurface,
+                    border = CardDefaults.outlinedCardBorder(),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
+                    Text(
+                        text = "No paired Bluetooth printers found. Tap 'Discover Nearby' above to search for your van's thermal printer.",
+                        style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText),
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            } else {
+                pairedPrinters.forEach { dev ->
+                    val isSelected = selectedPrinter?.address == dev.address
+                    val isTestingThis = testingAddress == dev.address
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isSelected) KanakAccentLight else KanakSurfaceVariant),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Bluetooth,
-                                contentDescription = null,
-                                tint = if (isSelected) KanakPrimaryBlue else KanakSecondaryText
-                            )
+                            .clickable { onSelectPrinterForDetail(dev) }
+                            .testTag("printer_card_${dev.address.replace(':', '_')}"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = KanakSurface),
+                        border = if (isSelected) {
+                            androidx.compose.foundation.BorderStroke(1.5.dp, KanakPrimaryBlue)
+                        } else {
+                            CardDefaults.outlinedCardBorder()
                         }
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (isSelected) KanakAccentLight else KanakSurfaceVariant),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Print,
+                                        contentDescription = null,
+                                        tint = if (isSelected) KanakPrimaryBlue else KanakSecondaryText
+                                    )
+                                }
 
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    text = dev.name,
-                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold, color = KanakPrimaryText)
-                                )
-                                if (isSelected) {
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = KanakAccentLight
-                                    ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Text(
-                                            text = "Preferred",
-                                            style = MaterialTheme.typography.labelSmall.copy(color = KanakPrimaryBlue, fontWeight = FontWeight.Bold),
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            text = dev.name,
+                                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold, color = KanakPrimaryText)
                                         )
+                                        if (isSelected) {
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = KanakAccentLight
+                                            ) {
+                                                Text(
+                                                    text = "Selected",
+                                                    style = MaterialTheme.typography.labelSmall.copy(color = KanakPrimaryBlue, fontWeight = FontWeight.Bold),
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        text = dev.address,
+                                        style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText)
+                                    )
+                                }
+
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = "Details",
+                                    tint = KanakSecondaryText
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            testingAddress = dev.address
+                                            statusMessage = "Testing RFCOMM connection to ${dev.name}..."
+                                            val res = printerManager.connectAndTest(dev)
+                                            testingAddress = null
+                                            when (res) {
+                                                is PrintResult.Success -> statusMessage = "Success! Test pattern printed on ${dev.name}."
+                                                is PrintResult.Failure -> statusMessage = "Connection failed: ${res.error}"
+                                            }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    enabled = !isTestingThis,
+                                    modifier = Modifier.testTag("test_connect_${dev.address.replace(':', '_')}")
+                                ) {
+                                    if (isTestingThis) {
+                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Connect & Test", fontSize = 12.sp)
+                                    }
+                                }
+
+                                if (!isSelected) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = {
+                                            printerManager.selectPrinter(dev)
+                                            statusMessage = "${dev.name} set as primary thermal printer"
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue)
+                                    ) {
+                                        Text("Select", fontSize = 12.sp)
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 2: DISCOVERED NEARBY DEVICES
+            Text(
+                text = "DISCOVERED NEARBY DEVICES (${discoveredPrinters.size})",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = KanakSecondaryText,
+                    letterSpacing = 1.sp
+                )
+            )
+
+            if (discoveredPrinters.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = KanakSurface,
+                    border = CardDefaults.outlinedCardBorder(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        if (isDiscovering) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = KanakPrimaryBlue)
                             Text(
-                                text = dev.address,
+                                text = "Searching for nearby Bluetooth ESC/POS printers...",
+                                style = MaterialTheme.typography.bodySmall.copy(color = KanakPrimaryBlue, fontWeight = FontWeight.Medium)
+                            )
+                        } else {
+                            Icon(Icons.Default.BluetoothDisabled, contentDescription = null, tint = KanakSecondaryText)
+                            Text(
+                                text = "No discovered devices. Tap 'Discover Nearby' to start active Bluetooth scanning.",
                                 style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText)
                             )
                         }
+                    }
+                }
+            } else {
+                discoveredPrinters.forEach { dev ->
+                    val isTestingThis = testingAddress == dev.address
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("discovered_printer_${dev.address.replace(':', '_')}"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = KanakSurface),
+                        border = CardDefaults.outlinedCardBorder()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(KanakAccentLight),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.BluetoothSearching, contentDescription = null, tint = KanakPrimaryBlue, modifier = Modifier.size(20.dp))
+                                }
 
-                        Icon(
-                            imageVector = Icons.Default.ChevronRight,
-                            contentDescription = "Details",
-                            tint = KanakSecondaryText
-                        )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = dev.name,
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold, color = KanakPrimaryText)
+                                    )
+                                    Text(
+                                        text = dev.address,
+                                        style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText)
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            testingAddress = dev.address
+                                            statusMessage = "Connecting to discovered ${dev.name}..."
+                                            val res = printerManager.connectAndTest(dev)
+                                            testingAddress = null
+                                            when (res) {
+                                                is PrintResult.Success -> statusMessage = "Connected to ${dev.name}! Test pattern sent."
+                                                is PrintResult.Failure -> statusMessage = "Connection failed: ${res.error}"
+                                            }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    enabled = !isTestingThis
+                                ) {
+                                    if (isTestingThis) {
+                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Text("Connect & Test", fontSize = 12.sp)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                Button(
+                                    onClick = {
+                                        printerManager.pairDevice(dev)
+                                        printerManager.selectPrinter(dev)
+                                        statusMessage = "Pairing initiated and ${dev.name} selected as printer"
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue)
+                                ) {
+                                    Text("Pair & Select", fontSize = 12.sp)
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -2,6 +2,7 @@ package com.example.kanak.licensing
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -9,6 +10,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -24,6 +27,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.kanak.domain.models.User
+import com.example.kanak.ui.components.KanakBrandLoadingDialog
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -32,6 +36,7 @@ fun CompanyRegistrationScreen(
     licenseManager: LicenseManager,
     currentUser: User,
     onRegistrationCompleted: () -> Unit,
+    onNavigateToJoinBusiness: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -104,6 +109,46 @@ fun CompanyRegistrationScreen(
                 ),
                 modifier = Modifier.padding(horizontal = 12.dp)
             )
+
+            if (onNavigateToJoinBusiness != null) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToJoinBusiness() },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = KanakAccentLight),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, KanakPrimaryBlue)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = KanakPrimaryBlue,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.GroupAdd, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Have an Employee Invite Code?",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                            )
+                            Text(
+                                text = "Join your company fleet directly without paying for a license",
+                                style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                            )
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = KanakPrimaryBlue)
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(4.dp))
 
@@ -396,6 +441,13 @@ fun CompanyRegistrationScreen(
             }
 
             Spacer(modifier = Modifier.height(20.dp))
+        }
+
+        if (isSubmitting) {
+            KanakBrandLoadingDialog(
+                message = "Registering Wholesale Business...",
+                subMessage = "Authoritative Cloud Enrollment & Request ID Generation"
+            )
         }
     }
 }
