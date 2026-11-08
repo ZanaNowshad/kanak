@@ -180,6 +180,9 @@ private fun MainSettingsView(
     var salesSyncStatus by remember { mutableStateOf<String?>(null) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
     var isSyncing by remember { mutableStateOf(false) }
+    val oauthSheetsToken by authManager.oauthSheetsToken.collectAsState()
+    var isAuthorizingSheets by remember { mutableStateOf(false) }
+    var oauthSheetsStatus by remember { mutableStateOf<String?>(null) }
 
     val initials = remember(currentUser) {
         val email = currentUser.email
@@ -758,6 +761,149 @@ private fun MainSettingsView(
                             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Run Service")
+                        }
+                    }
+                }
+            }
+
+            // Google Sheets & Drive OAuth 2.0 Direct API Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("google_sheets_oauth_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = KanakSurface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(KanakPrimaryBlue.copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.VpnKey, contentDescription = null, tint = KanakPrimaryBlue, modifier = Modifier.size(20.dp))
+                            }
+                            Column {
+                                Text(
+                                    text = "Google Sheets & Drive OAuth 2.0",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
+                                )
+                                Text(
+                                    text = "Direct authenticated Retrofit client (API v4)",
+                                    style = MaterialTheme.typography.labelSmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (!oauthSheetsToken.isNullOrBlank()) KanakSuccessBackground else Color(0xFFFEF3C7)
+                        ) {
+                            Text(
+                                text = if (!oauthSheetsToken.isNullOrBlank()) "OAuth Active" else "Ready to Authorize",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = if (!oauthSheetsToken.isNullOrBlank()) KanakSuccess else Color(0xFFD97706),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                ),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Enables direct bi-directional synchronization with Google Sheets API v4 using requested scopes:\n• https://www.googleapis.com/auth/spreadsheets\n• https://www.googleapis.com/auth/drive.file",
+                        style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 12.sp)
+                    )
+
+                    if (oauthSheetsStatus != null) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = KanakAccentLight,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = oauthSheetsStatus ?: "",
+                                style = MaterialTheme.typography.bodySmall.copy(color = KanakPrimaryBlue, fontWeight = FontWeight.SemiBold),
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    isAuthorizingSheets = true
+                                    oauthSheetsStatus = "Requesting OAuth 2.0 authorization for Sheets & Drive..."
+                                    val res = authManager.requestGoogleSheetsOAuth(context)
+                                    isAuthorizingSheets = false
+                                    res.onSuccess {
+                                        oauthSheetsStatus = "OAuth 2.0 access active! Ready for direct Sheets create/read/append."
+                                    }.onFailure { err ->
+                                        oauthSheetsStatus = "Authorization note: ${err.message}"
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("request_oauth_scopes_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            enabled = !isAuthorizingSheets
+                        ) {
+                            if (isAuthorizingSheets) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Request Scopes")
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isAuthorizingSheets = true
+                                    oauthSheetsStatus = "Testing Retrofit Google Sheets API client (read rows)..."
+                                    val service = com.example.kanak.data.remote.GoogleSheetsService {
+                                        authManager.getOAuthSheetsToken()
+                                    }
+                                    val sheetId = repository.getGoogleSheetId() ?: "master_sheet"
+                                    val readRes = service.readRows(sheetId, "Products!A1:J5")
+                                    isAuthorizingSheets = false
+                                    readRes.onSuccess { rows ->
+                                        oauthSheetsStatus = "Verified! Read ${rows.size} rows directly via Google Sheets API client."
+                                    }.onFailure { err ->
+                                        oauthSheetsStatus = "API response: ${err.message}"
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("test_sheets_api_client_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue),
+                            enabled = !isAuthorizingSheets
+                        ) {
+                            Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Test Client")
                         }
                     }
                 }

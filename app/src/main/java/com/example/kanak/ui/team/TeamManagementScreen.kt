@@ -137,6 +137,7 @@ fun TeamManagementScreen(
     // Invite Employee Dialog
     if (showInviteDialog) {
         var email by remember { mutableStateOf("") }
+        var displayName by remember { mutableStateOf("") }
         var selectedRole by remember { mutableStateOf(User.ROLE_SALESPERSON) }
         var selectedVanId by remember { mutableStateOf<String?>(vans.firstOrNull()?.vanId) }
         var selectedPermissions by remember { mutableStateOf(KanakPermissions.DEFAULT_SALESPERSON_PERMISSIONS.toMutableSet()) }
@@ -152,7 +153,7 @@ fun TeamManagementScreen(
                     }
                 }
             },
-            title = { Text("Invite Team Member", fontWeight = FontWeight.Bold) },
+            title = { Text("Add / Invite Staff Member", fontWeight = FontWeight.Bold) },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -174,6 +175,19 @@ fun TeamManagementScreen(
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth().testTag("invite_email_input")
+                    )
+
+                    OutlinedTextField(
+                        value = displayName,
+                        onValueChange = {
+                            displayName = it
+                            inviteError = null
+                        },
+                        label = { Text("Staff Full Name") },
+                        placeholder = { Text("e.g. Ali Ahmed") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("staff_name_input")
                     )
 
                     Text("Select Role:", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
@@ -265,36 +279,65 @@ fun TeamManagementScreen(
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            isInviting = true
-                            val res = repository.inviteEmployee(
-                                recipientEmail = email,
-                                role = selectedRole,
-                                assignedVanId = selectedVanId,
-                                permissions = selectedPermissions,
-                                invitedBy = currentUser.displayName
-                            )
-                            isInviting = false
-                            res.onSuccess { inv ->
-                                Toast.makeText(context, "Invitation sent! Code: ${inv.inviteCode}", Toast.LENGTH_LONG).show()
-                                showInviteDialog = false
-                            }.onFailure {
-                                inviteError = it.message ?: "Failed to invite employee"
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                isInviting = true
+                                val res = repository.inviteEmployee(
+                                    recipientEmail = email,
+                                    role = selectedRole,
+                                    assignedVanId = selectedVanId,
+                                    permissions = selectedPermissions,
+                                    invitedBy = currentUser.displayName
+                                )
+                                isInviting = false
+                                res.onSuccess { inv ->
+                                    Toast.makeText(context, "Invitation sent! Code: ${inv.inviteCode}", Toast.LENGTH_LONG).show()
+                                    showInviteDialog = false
+                                }.onFailure {
+                                    inviteError = it.message ?: "Failed to invite employee"
+                                }
                             }
-                        }
-                    },
-                    enabled = !isInviting && email.isNotBlank(),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue, contentColor = Color.White),
-                    modifier = Modifier.testTag("send_invitation_button")
-                ) {
-                    Text("Send Invitation", fontWeight = FontWeight.Bold)
+                        },
+                        enabled = !isInviting && email.isNotBlank(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Send Code")
+                    }
+
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                isInviting = true
+                                val res = repository.createStaffMember(
+                                    email = email,
+                                    displayName = displayName,
+                                    role = selectedRole,
+                                    assignedVanId = selectedVanId,
+                                    permissions = selectedPermissions,
+                                    addedBy = currentUser.displayName
+                                )
+                                isInviting = false
+                                res.onSuccess { mem ->
+                                    Toast.makeText(context, "Added ${mem.displayName} to company staff!", Toast.LENGTH_SHORT).show()
+                                    showInviteDialog = false
+                                }.onFailure {
+                                    inviteError = it.message ?: "Failed to add staff"
+                                }
+                            }
+                        },
+                        enabled = !isInviting && email.isNotBlank(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = KanakPrimaryBlue, contentColor = Color.White),
+                        modifier = Modifier.testTag("add_staff_button")
+                    ) {
+                        Text("Add Staff", fontWeight = FontWeight.Bold)
+                    }
                 }
             },
             dismissButton = {
-                OutlinedButton(onClick = { showInviteDialog = false }, shape = RoundedCornerShape(10.dp)) {
+                TextButton(onClick = { showInviteDialog = false }) {
                     Text("Cancel")
                 }
             }

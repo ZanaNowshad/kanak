@@ -22,9 +22,9 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     setContent {
-      val context = this
-      val repository = remember { KanakRepository(context) }
-      val authManager = remember { GoogleAuthManager(context) }
+      val context = applicationContext
+      val repository = remember { KanakRepository.getInstance(context) }
+      val authManager = remember { GoogleAuthManager(this@MainActivity) }
       val printerManager = remember { BluetoothPrinterManager(context) }
 
       KanakTheme {

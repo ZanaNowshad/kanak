@@ -721,4 +721,41 @@ class KanakRepositoryRobolectricTest {
         assertTrue(resolvedEmployee.hasPermission(com.example.kanak.domain.models.KanakPermissions.SALES_CREATE))
         assertFalse(resolvedEmployee.hasPermission(com.example.kanak.domain.models.KanakPermissions.SETTINGS_UPDATE))
     }
+
+    @Test
+    fun testBusinessSetupCompletionGate() = runTest {
+        val superAdmin = "zanabalmuhamed@gmail.com"
+        assertTrue("Super admin should always be considered setup-completed", repository.isBusinessSetupCompleted(superAdmin))
+
+        val newUser = "newowner@fmcgdistribution.bh"
+        assertFalse("New user with no registered business must fail the gate", repository.isBusinessSetupCompleted(newUser))
+
+        val setupRes = repository.completeBusinessSetup(
+            userEmail = newUser,
+            companyName = "Manama FMCG Distribution",
+            businessType = "Wholesale FMCG",
+            address = "Building 100, Road 20, Block 300, Manama",
+            phone = "+973 3300 9988",
+            crNumber = "998877-1",
+            vatNumber = "BH200099887700",
+            spreadsheetId = "1TestSpreadsheetId_998877",
+            createInitialVan = true,
+            vanCode = "VAN-01",
+            vanName = "Capital Fleet 01",
+            registrationNo = "BH 55443",
+            initialStaffName = "Hassan Al-Majid"
+        )
+
+        assertTrue("completeBusinessSetup must succeed", setupRes.isSuccess)
+        assertTrue("After completing setup, user must pass the gate", repository.isBusinessSetupCompleted(newUser))
+
+        // Verify that business details and initial van/staff were persisted
+        assertEquals("Manama FMCG Distribution", repository.getBusinessName())
+        assertEquals("Building 100, Road 20, Block 300, Manama", repository.getBusinessAddress())
+        val vans = repository.vans.value
+        assertTrue("Initial van must be present in repository", vans.any { it.vanCode == "VAN-01" })
+        val staff = repository.teamMemberships.value
+        assertTrue("Initial staff must be present in repository", staff.any { it.displayName == "Hassan Al-Majid" })
+    }
 }
+

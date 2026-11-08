@@ -50,24 +50,23 @@ fun KanakStartupLoader(
     // Smooth milestone advancement
     LaunchedEffect(Unit) {
         val phases = listOf(
-            0.15f to "Verifying secure local SQLite cache...",
-            0.35f to "Mounting immutable Bahrain VAT ledger...",
-            0.60f to "Calibrating 3-decimal BHD financial engine...",
-            0.85f to "Checking cloud sync & van allocations...",
+            0.20f to "Verifying secure local SQLite cache...",
+            0.50f to "Mounting immutable Bahrain VAT ledger...",
+            0.80f to "Calibrating 3-decimal BHD financial engine...",
             1.00f to "Ready • Kingdom of Bahrain"
         )
         for ((targetProgress, text) in phases) {
             currentPhaseText = text
             val startProg = progress
-            val steps = 15
+            val steps = 8
             val diff = (targetProgress - startProg) / steps
             for (i in 1..steps) {
                 progress += diff
-                delay(20)
+                delay(6)
             }
-            delay(120)
+            delay(30)
         }
-        delay(250)
+        delay(60)
         onStartupComplete()
     }
 

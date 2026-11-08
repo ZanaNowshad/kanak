@@ -40,7 +40,7 @@ class BootstrapCloudManager(
     val bootstrapStatus: StateFlow<BootstrapStatus> = _bootstrapStatus.asStateFlow()
 
     companion object {
-        val MASTER_SCHEMA_TITLES = listOf("Products", "Customers", "Suppliers", "DailySalesLogs")
+        val MASTER_SCHEMA_TITLES = listOf("Products", "Customers", "Suppliers", "DailySalesLogs", "Vans", "Staff")
 
         val PRODUCTS_HEADER: List<Any> = listOf(
             "product_id", "barcode", "name", "category",
@@ -59,6 +59,14 @@ class BootstrapCloudManager(
             "invoice_id", "invoice_number", "date", "customer_name",
             "subtotal_bhd", "vat_total_bhd", "total_bhd", "payment_type",
             "van_code", "created_by", "status"
+        )
+        val VANS_HEADER: List<Any> = listOf(
+            "van_id", "business_id", "van_code", "van_name",
+            "registration_no", "salesperson_id", "salesperson_name", "status", "notes"
+        )
+        val STAFF_HEADER: List<Any> = listOf(
+            "membership_id", "business_id", "user_id", "email",
+            "display_name", "role", "assigned_van_code", "status", "joined_at"
         )
     }
 
@@ -141,6 +149,18 @@ class BootstrapCloudManager(
                     spreadsheetId = newSheetId,
                     range = "DailySalesLogs!A1:K1",
                     body = GoogleValueRange(values = listOf(DAILY_SALES_LOGS_HEADER))
+                )
+                syncManager.sheetsApiService.updateValues(
+                    authHeader = authHeader,
+                    spreadsheetId = newSheetId,
+                    range = "Vans!A1:I1",
+                    body = GoogleValueRange(values = listOf(VANS_HEADER))
+                )
+                syncManager.sheetsApiService.updateValues(
+                    authHeader = authHeader,
+                    spreadsheetId = newSheetId,
+                    range = "Staff!A1:I1",
+                    body = GoogleValueRange(values = listOf(STAFF_HEADER))
                 )
 
                 // Save config to repository & preferences

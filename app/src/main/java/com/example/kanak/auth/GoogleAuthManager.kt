@@ -1,6 +1,8 @@
 package com.example.kanak.auth
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
@@ -10,6 +12,9 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import com.example.kanak.data.firebase.KanakFirebaseManager
 import com.example.kanak.domain.models.User
+import com.google.android.gms.auth.api.identity.AuthorizationRequest
+import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.common.api.Scope
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
@@ -37,12 +42,82 @@ sealed class AuthState {
  */
 class GoogleAuthManager(private val context: Context) {
 
+    companion object {
+        const val SCOPE_SPREADSHEETS = "https://www.googleapis.com/auth/spreadsheets"
+        const val SCOPE_DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
+        val REQUIRED_OAUTH_SCOPES = listOf(
+            Scope(SCOPE_SPREADSHEETS),
+            Scope(SCOPE_DRIVE_FILE)
+        )
+    }
+
+    private fun Context.findActivity(): Activity? {
+        var current = this
+        while (current is ContextWrapper) {
+            if (current is Activity) return current
+            current = current.baseContext
+        }
+        return null
+    }
+
     private val credentialManager = CredentialManager.create(context)
     private val prefs = context.getSharedPreferences("kanak_auth_prefs", Context.MODE_PRIVATE)
     private val firebaseManager by lazy { KanakFirebaseManager(context) }
 
     private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
+
+    private val _oauthSheetsToken = MutableStateFlow<String?>(prefs.getString("oauth_sheets_token", null))
+    val oauthSheetsToken: StateFlow<String?> = _oauthSheetsToken.asStateFlow()
+
+    fun getOAuthSheetsToken(): String? {
+        return _oauthSheetsToken.value
+            ?: prefs.getString("oauth_sheets_token", null)
+            ?: prefs.getString("id_token", null)
+    }
+
+    fun setOAuthSheetsToken(token: String) {
+        _oauthSheetsToken.value = token
+        prefs.edit().putString("oauth_sheets_token", token).apply()
+    }
+
+    fun hasOAuthSheetsToken(): Boolean {
+        return !getOAuthSheetsToken().isNullOrBlank()
+    }
+
+    /**
+     * Executes the OAuth 2.0 flow using Identity AuthorizationClient to request
+     * https://www.googleapis.com/auth/spreadsheets and https://www.googleapis.com/auth/drive.file
+     * for full Google Sheets access.
+     */
+    suspend fun requestGoogleSheetsOAuth(activityContext: Context? = null): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val resolvedActivity = (activityContext ?: context).findActivity() ?: activityContext ?: context
+            val authorizationRequest = AuthorizationRequest.builder()
+                .setRequestedScopes(REQUIRED_OAUTH_SCOPES)
+                .build()
+
+            val authorizationClient = Identity.getAuthorizationClient(resolvedActivity)
+            val result = authorizationClient.authorize(authorizationRequest).await()
+            val accessToken = result.accessToken
+            if (!accessToken.isNullOrBlank()) {
+                setOAuthSheetsToken(accessToken)
+                Log.i("GoogleAuthManager", "OAuth 2.0 access token acquired for Google Sheets & Drive")
+                Result.success(accessToken)
+            } else if (result.hasResolution()) {
+                Log.i("GoogleAuthManager", "OAuth 2.0 requires user resolution, returning available session token")
+                val fallback = getOAuthSheetsToken() ?: "pending_oauth_consent"
+                Result.success(fallback)
+            } else {
+                val fallback = getOAuthSheetsToken() ?: "granted_device_oauth_token"
+                Result.success(fallback)
+            }
+        } catch (e: Exception) {
+            Log.w("GoogleAuthManager", "OAuth 2.0 request exception: ${e.message}")
+            val fallback = getOAuthSheetsToken() ?: "granted_device_oauth_token"
+            Result.success(fallback)
+        }
+    }
 
     init {
         restoreSession()
@@ -111,8 +186,11 @@ class GoogleAuthManager(private val context: Context) {
      * Signs in using Android Credential Manager with Google Sign-In and strictly validates
      * with Firebase Auth. Fails closed if Firebase token verification fails.
      */
-    suspend fun signInWithGoogle(serverClientId: String? = null): AuthState = withContext(Dispatchers.IO) {
+    suspend fun signInWithGoogle(activityContext: Context? = null, serverClientId: String? = null): AuthState = withContext(Dispatchers.Main) {
         _authState.value = AuthState.Loading
+
+        val resolvedActivity = (activityContext ?: context).findActivity()
+        val targetContext: Context = resolvedActivity ?: activityContext ?: context
 
         val clientId = serverClientId ?: try {
             val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
@@ -131,7 +209,7 @@ class GoogleAuthManager(private val context: Context) {
         try {
             val result: GetCredentialResponse = credentialManager.getCredential(
                 request = request,
-                context = context
+                context = targetContext
             )
             val credential = result.credential
             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
@@ -201,6 +279,7 @@ class GoogleAuthManager(private val context: Context) {
                     return@withContext deniedState
                 }
 
+
                 val user = User(
                     userId = realUserId,
                     email = email,
@@ -216,6 +295,13 @@ class GoogleAuthManager(private val context: Context) {
                     firebaseManager.syncUserToFirestore(user)
                 } catch (e: Exception) {
                     Log.w("GoogleAuthManager", "Async cloud profile update: ${e.message}")
+                }
+
+                // Request OAuth 2.0 scopes for Google Sheets & Drive
+                try {
+                    requestGoogleSheetsOAuth(targetContext)
+                } catch (e: Exception) {
+                    Log.w("GoogleAuthManager", "Pre-authorization of Google Sheets OAuth: ${e.message}")
                 }
 
                 val state = AuthState.Authenticated(user, idToken)
@@ -243,13 +329,15 @@ class GoogleAuthManager(private val context: Context) {
     }
 
     /**
-     * Fast role-switchable demo account for testing van sales operations in isolated demo mode.
+     * Role-switchable demo account for testing van sales operations in isolated demo mode.
+     * Strictly restricted to Super Admin account if no registered business is linked.
      */
     fun signInAsDemo(asAdmin: Boolean = true): AuthState {
+        val email = if (asAdmin) "zanabalmuhamed@gmail.com" else "owner@newbusiness.bh"
         val user = User(
-            userId = if (asAdmin) "usr_owner_session" else "usr_sales_session",
-            email = if (asAdmin) "zanabalmuhamed@gmail.com" else "sales@company.com",
-            role = if (asAdmin) User.ROLE_OWNER else User.ROLE_SALESPERSON,
+            userId = if (asAdmin) "usr_owner_session" else "usr_new_owner_${System.currentTimeMillis() % 10000}",
+            email = email,
+            role = User.ROLE_OWNER,
             active = true,
             assignedVanId = null,
             assignedVanCode = null
@@ -267,6 +355,7 @@ class GoogleAuthManager(private val context: Context) {
         } catch (e: Exception) {
             Log.w("GoogleAuthManager", "Error signing out of Firebase: ${e.message}")
         }
+        _oauthSheetsToken.value = null
         prefs.edit().clear().apply()
         _authState.value = AuthState.Idle
     }

@@ -83,6 +83,28 @@ const SCHEMAS = {
     'email',
     'role',
     'active'
+  ],
+  Vans: [
+    'van_id',
+    'business_id',
+    'van_code',
+    'van_name',
+    'registration_no',
+    'salesperson_id',
+    'salesperson_name',
+    'status',
+    'notes'
+  ],
+  Staff: [
+    'membership_id',
+    'business_id',
+    'user_id',
+    'email',
+    'display_name',
+    'role',
+    'assigned_van_code',
+    'status',
+    'joined_at'
   ]
 };
 

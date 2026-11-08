@@ -142,6 +142,7 @@ class KanakRepository(private val context: Context) {
         if (_products.value.any { it.productId.startsWith("prod_00") || it.name.contains("Almarai", ignoreCase = true) }) {
             clearAllData()
         }
+        purgeNonSuperAdminUsersAndCascadeClean()
         recalculateDashboard()
         setupNetworkMonitoring()
         refreshPendingSyncCount()
@@ -1470,20 +1471,23 @@ class KanakRepository(private val context: Context) {
         // 1. First attempt to load from Room database
         try {
             val db = roomDb
-            val p = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.productDao().getAllProducts() }
-            val c = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.customerDao().getAllCustomers() }
-            val s = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.supplierDao().getAllSuppliers() }
-            val pu = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.purchaseDao().getAllPurchases() }
-            val inv = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.invoiceDao().getAllInvoicesWithLines() }
-            val sa = kotlinx.coroutines.runBlocking(Dispatchers.IO) { db.stockAdjustmentDao().getAllAdjustments() }
+            val (pList, cList, sList, puList, invList, saList) = kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                val p = db.productDao().getAllProducts()
+                val c = db.customerDao().getAllCustomers()
+                val s = db.supplierDao().getAllSuppliers()
+                val pu = db.purchaseDao().getAllPurchases()
+                val inv = db.invoiceDao().getAllInvoicesWithLines()
+                val sa = db.stockAdjustmentDao().getAllAdjustments()
+                Tuple6(p, c, s, pu, inv, sa)
+            }
 
-            if (p.isNotEmpty() || c.isNotEmpty() || inv.isNotEmpty()) {
-                _products.value = p.map { it.toDomain() }
-                _customers.value = c.map { it.toDomain() }
-                _suppliers.value = s.map { it.toDomain() }
-                _purchases.value = pu.map { it.toDomain() }
-                _invoices.value = inv.map { it.toDomain() }
-                _stockAdjustments.value = sa.map { it.toDomain() }
+            if (pList.isNotEmpty() || cList.isNotEmpty() || invList.isNotEmpty()) {
+                _products.value = pList.map { it.toDomain() }
+                _customers.value = cList.map { it.toDomain() }
+                _suppliers.value = sList.map { it.toDomain() }
+                _purchases.value = puList.map { it.toDomain() }
+                _invoices.value = invList.map { it.toDomain() }
+                _stockAdjustments.value = saList.map { it.toDomain() }
                 return true
             }
         } catch (_: Exception) {}
@@ -1853,6 +1857,41 @@ class KanakRepository(private val context: Context) {
             return Result.success(pushedCount)
         } catch (e: Exception) {
             return Result.failure(e)
+        }
+    }
+
+    /**
+     * Retrieves all pending sales transactions stored in the local SQLite Room database.
+     */
+    suspend fun getPendingOfflineInvoicesFromRoom(): List<Invoice> = withContext(Dispatchers.IO) {
+        try {
+            val pendingEntities = roomDb.invoiceDao().getInvoicesBySyncStatus(com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_PENDING)
+            pendingEntities.mapNotNull { pEntity ->
+                roomDb.invoiceDao().getInvoiceWithLinesById(pEntity.invoiceId)?.toDomain()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("KanakRepository", "Error fetching pending offline invoices from Room: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Updates an offline sales transaction's status to SYNCED in the local SQLite Room database.
+     */
+    suspend fun markInvoiceSyncedInRoom(invoiceId: String) = withContext(Dispatchers.IO) {
+        try {
+            roomDb.invoiceDao().updateSyncStatus(invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED)
+            // Also mark matching item in Room sync queue as completed
+            val queueItems = roomDb.syncQueueDao().getPendingItems()
+            for (item in queueItems) {
+                if (item.payloadJson.contains(invoiceId)) {
+                    roomDb.syncQueueDao().deleteById(item.queueId)
+                }
+            }
+            refreshPendingSyncCount()
+            updateSyncState()
+        } catch (e: Exception) {
+            android.util.Log.w("KanakRepository", "Error updating invoice sync status in Room: ${e.message}")
         }
     }
 
@@ -2500,6 +2539,287 @@ class KanakRepository(private val context: Context) {
         return baseUser
     }
 
+    /**
+     * Checks if a user has an active, registered business linked to their account.
+     * Enforces the "no business = no user" policy by requiring completion of the Business Setup Wizard.
+     */
+    fun isBusinessSetupCompleted(email: String): Boolean {
+        val clean = email.trim().lowercase(Locale.US)
+        if (clean == "zanabalmuhamed@gmail.com" || clean == "admin@kanak-fmcg.bh") {
+            return true
+        }
+
+        // Check if user is an active team/staff member belonging to a registered business
+        val membership = _teamMemberships.value.find {
+            (it.email.trim().equals(clean, ignoreCase = true) || it.userId == clean) &&
+            it.businessId.isNotBlank() &&
+            !it.status.equals("SUSPENDED", ignoreCase = true)
+        }
+        if (membership != null) return true
+
+        // Check if user completed the first-time setup wizard
+        val completedInPrefs = prefs.getBoolean("biz_setup_completed_$clean", false)
+        if (completedInPrefs) return true
+
+        // Check if company profile is activated in LicenseManager
+        try {
+            val licProfile = LicenseManager(context).loadProfile()
+            if (licProfile.email.trim().equals(clean, ignoreCase = true) && licProfile.isActivated) {
+                return true
+            }
+        } catch (_: Exception) {}
+
+        return false
+    }
+
+    fun markBusinessSetupCompleted(email: String, completed: Boolean = true) {
+        val clean = email.trim().lowercase(Locale.US)
+        prefs.edit().putBoolean("biz_setup_completed_$clean", completed).apply()
+    }
+
+    suspend fun completeBusinessSetup(
+        userEmail: String,
+        companyName: String,
+        businessType: String,
+        address: String,
+        phone: String,
+        crNumber: String,
+        vatNumber: String,
+        spreadsheetId: String?,
+        createInitialVan: Boolean,
+        vanCode: String,
+        vanName: String,
+        registrationNo: String,
+        initialStaffName: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            setBusinessName(companyName)
+            setBusinessAddress(address)
+            if (vatNumber.isNotBlank()) setVatNumber(vatNumber)
+
+            val newBizId = "biz_${UUID.randomUUID().toString().take(8)}"
+            val newBusiness = Business(
+                businessId = newBizId,
+                name = companyName,
+                crNumber = crNumber.ifBlank { "CR-PENDING" },
+                vatNumber = vatNumber.ifBlank { "BH200098765400" },
+                ownerEmail = userEmail,
+                ownerName = companyName,
+                phone = phone,
+                address = address,
+                status = Business.STATUS_ACTIVE,
+                createdAt = getBahrainTimestampString()
+            )
+            _currentBusiness.value = newBusiness
+            prefs.edit().putString("current_business_json", moshi.adapter(Map::class.java).toJson(
+                mapOf(
+                    "business_id" to newBusiness.businessId,
+                    "name" to newBusiness.name,
+                    "cr_number" to newBusiness.crNumber,
+                    "vat_number" to newBusiness.vatNumber,
+                    "owner_email" to newBusiness.ownerEmail,
+                    "owner_name" to newBusiness.ownerName,
+                    "phone" to newBusiness.phone,
+                    "address" to newBusiness.address,
+                    "status" to newBusiness.status,
+                    "created_at" to newBusiness.createdAt
+                )
+            )).apply()
+
+            // Link spreadsheet
+            if (!spreadsheetId.isNullOrBlank()) {
+                autoProvisionGoogleWorkbook(companyName, spreadsheetId)
+            }
+
+            // Create initial van and staff if requested
+            if (createInitialVan) {
+                val vId = "van_${UUID.randomUUID().toString().take(8)}"
+                val sId = "staff_${UUID.randomUUID().toString().take(8)}"
+
+                val newStaff = EmployeeMembership(
+                    membershipId = UUID.randomUUID().toString(),
+                    businessId = newBizId,
+                    businessName = companyName,
+                    userId = sId,
+                    email = if (userEmail.contains("@")) "driver@${userEmail.substringAfter("@")}" else "driver@company.bh",
+                    displayName = initialStaffName.ifBlank { "Route Driver" },
+                    role = User.ROLE_SALESPERSON,
+                    assignedVanId = vId,
+                    assignedVanCode = vanCode.ifBlank { "VAN-01" },
+                    permissions = KanakPermissions.DEFAULT_SALESPERSON_PERMISSIONS,
+                    status = "ACTIVE",
+                    joinedAt = getBahrainDateString()
+                )
+
+                val newVan = Van(
+                    vanId = vId,
+                    businessId = newBizId,
+                    vanCode = vanCode.ifBlank { "VAN-01" },
+                    vanName = vanName.ifBlank { "North Route Van" },
+                    registrationNo = registrationNo.ifBlank { "BH 45678" },
+                    assignedSalespersonId = sId,
+                    assignedSalespersonName = newStaff.displayName,
+                    status = Van.STATUS_ACTIVE,
+                    notes = "Provisioned during Business Setup Wizard"
+                )
+
+                _vans.value = _vans.value + newVan
+                _teamMemberships.value = _teamMemberships.value + newStaff
+                saveMultiTenantState()
+            }
+
+            // Activate license locally and in LicenseManager
+            try {
+                val licManager = LicenseManager(context)
+                licManager.registerCompany(
+                    companyName = companyName,
+                    ownerName = companyName,
+                    phone = phone,
+                    email = userEmail,
+                    crNumber = crNumber,
+                    address = address
+                )
+                licManager.validateAndActivate("KNK-MASTER-DEV-PASS")
+            } catch (e: Exception) {
+                android.util.Log.w("KanakRepository", "License registration sync: ${e.message}")
+            }
+
+            // Mark setup complete
+            markBusinessSetupCompleted(userEmail, true)
+            recalculateDashboard()
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            android.util.Log.e("KanakRepository", "Error completing business setup: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    fun purgeNonSuperAdminUsersAndCascadeClean() {
+        val superAdminEmail = "zanabalmuhamed@gmail.com"
+        
+        // 1. Purge/deactivate all memberships that are not the super-admin account
+        val remainingMemberships = _teamMemberships.value.filter {
+            it.email.trim().equals(superAdminEmail, ignoreCase = true)
+        }
+        _teamMemberships.value = remainingMemberships
+
+        // 2. Cascade-clean invitations: revoke/remove any pending invitations not for super-admin
+        val remainingInvitations = _pendingInvitations.value.filter {
+            it.recipientEmail.trim().equals(superAdminEmail, ignoreCase = true)
+        }
+        _pendingInvitations.value = remainingInvitations
+
+        // 3. Cascade-clean vans: reassign or unassign all van drivers who were removed
+        val validUserIds = remainingMemberships.map { it.userId }.toSet()
+        val cleanedVans = _vans.value.map { van ->
+            if (van.assignedSalespersonId != null && !validUserIds.contains(van.assignedSalespersonId)) {
+                van.copy(
+                    assignedSalespersonId = null,
+                    assignedSalespersonName = null,
+                    status = Van.STATUS_AVAILABLE
+                )
+            } else {
+                van
+            }
+        }
+        _vans.value = cleanedVans
+
+        // 4. Save clean multi-tenant state
+        saveMultiTenantState()
+    }
+
+    suspend fun upsertVanLocally(van: Van) {
+        val current = _vans.value.toMutableList()
+        val idx = current.indexOfFirst { it.vanId == van.vanId || it.vanCode.equals(van.vanCode, ignoreCase = true) }
+        if (idx >= 0) {
+            current[idx] = van
+        } else {
+            current.add(van)
+        }
+        _vans.value = current
+        saveMultiTenantState()
+    }
+
+    suspend fun upsertStaffLocally(member: EmployeeMembership) {
+        val current = _teamMemberships.value.toMutableList()
+        val idx = current.indexOfFirst { it.membershipId == member.membershipId || it.email.equals(member.email, ignoreCase = true) }
+        if (idx >= 0) {
+            current[idx] = member
+        } else {
+            current.add(member)
+        }
+        _teamMemberships.value = current
+        saveMultiTenantState()
+    }
+
+    suspend fun createStaffMember(
+        email: String,
+        displayName: String,
+        role: String = User.ROLE_SALESPERSON,
+        assignedVanId: String? = null,
+        permissions: Set<String> = KanakPermissions.DEFAULT_SALESPERSON_PERMISSIONS,
+        addedBy: String
+    ): Result<EmployeeMembership> = mutationMutex.withLock {
+        val trimmedEmail = email.trim().lowercase()
+        if (trimmedEmail.isBlank() || !trimmedEmail.contains("@")) {
+            return Result.failure(IllegalArgumentException("Please provide a valid staff email"))
+        }
+
+        if (_teamMemberships.value.any { it.email.equals(trimmedEmail, ignoreCase = true) }) {
+            return Result.failure(IllegalArgumentException("Staff member with email '$trimmedEmail' already exists"))
+        }
+
+        val assignedVan = _vans.value.find { it.vanId == assignedVanId }
+        val name = displayName.trim().ifBlank {
+            trimmedEmail.substringBefore('@').replace('.', ' ')
+                .split(' ').joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+        }
+
+        val membership = EmployeeMembership(
+            membershipId = UUID.randomUUID().toString(),
+            businessId = getBusinessId(),
+            businessName = getBusinessName(),
+            userId = UUID.randomUUID().toString(),
+            email = trimmedEmail,
+            displayName = name,
+            role = role,
+            assignedVanId = assignedVanId,
+            assignedVanCode = assignedVan?.vanCode,
+            permissions = permissions,
+            status = "ACTIVE",
+            joinedAt = getBahrainDateString()
+        )
+
+        _teamMemberships.value = _teamMemberships.value + membership
+
+        if (assignedVanId != null) {
+            val vIdx = _vans.value.indexOfFirst { it.vanId == assignedVanId }
+            if (vIdx != -1) {
+                val v = _vans.value[vIdx]
+                val vList = _vans.value.toMutableList()
+                vList[vIdx] = v.copy(
+                    assignedSalespersonId = membership.userId,
+                    assignedSalespersonName = membership.displayName,
+                    status = Van.STATUS_ACTIVE
+                )
+                _vans.value = vList
+            }
+        }
+
+        recordAuditEvent(
+            businessId = getBusinessId(),
+            actorUserId = addedBy,
+            actorEmail = addedBy,
+            action = "STAFF_ADDED",
+            targetType = "MEMBERSHIP",
+            targetId = membership.membershipId,
+            details = "Added staff $trimmedEmail ($name) as $role to van ${assignedVan?.vanCode ?: "None"}"
+        )
+        saveMultiTenantState()
+        return Result.success(membership)
+    }
+
     suspend fun transferStock(
         sourceType: String, // "WAREHOUSE" or "VAN"
         sourceId: String,   // "WAREHOUSE" or vanId
@@ -2881,3 +3201,8 @@ class KanakRepository(private val context: Context) {
         )
     }
 }
+
+data class Tuple6<A, B, C, D, E, F>(
+    val a: A, val b: B, val c: C, val d: D, val e: E, val f: F
+)
+

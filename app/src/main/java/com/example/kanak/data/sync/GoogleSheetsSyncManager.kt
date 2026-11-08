@@ -6,8 +6,10 @@ import com.example.kanak.data.remote.*
 import com.example.kanak.data.repository.KanakRepository
 import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.domain.models.Customer
+import com.example.kanak.domain.models.EmployeeMembership
 import com.example.kanak.domain.models.Product
 import com.example.kanak.domain.models.Supplier
+import com.example.kanak.domain.models.Van
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,19 +38,12 @@ class GoogleSheetsSyncManager(
 ) {
     private val TAG = "GoogleSheetsSyncManager"
 
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
-        .build()
+    val sheetsService: GoogleSheetsService = GoogleSheetsService {
+        val authManager = com.example.kanak.auth.GoogleAuthManager(context)
+        authManager.getOAuthSheetsToken() ?: repository.currentAuthToken
+    }
 
-    private val retrofit = Retrofit.Builder()
-        .baseUrl("https://sheets.googleapis.com/")
-        .client(okHttpClient)
-        .addConverterFactory(MoshiConverterFactory.create())
-        .build()
-
-    val sheetsApiService: GoogleSheetsApiService = retrofit.create(GoogleSheetsApiService::class.java)
+    val sheetsApiService: GoogleSheetsApiService get() = sheetsService.api
 
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
@@ -88,7 +83,17 @@ class GoogleSheetsSyncManager(
             val pushSales = pushDailySalesLogsToSheets(authHeader, spreadsheetId).getOrDefault(0)
             processedCount += pushSales
 
-            val summaryMsg = "Bi-directional sync completed ($processedCount records synchronized across Products, Customers, Suppliers & Sales)"
+            // 5. Vans Sync
+            val pullVans = pullVansFromSheets(authHeader, spreadsheetId).getOrDefault(0)
+            val pushVans = pushVansToSheets(authHeader, spreadsheetId).getOrDefault(0)
+            processedCount += pullVans + pushVans
+
+            // 6. Staff Sync
+            val pullStaff = pullStaffFromSheets(authHeader, spreadsheetId).getOrDefault(0)
+            val pushStaff = pushStaffToSheets(authHeader, spreadsheetId).getOrDefault(0)
+            processedCount += pullStaff + pushStaff
+
+            val summaryMsg = "Bi-directional sync completed ($processedCount records synchronized across Products, Customers, Suppliers, Vans, Staff & Sales)"
             _syncState.value = SyncState.Success(
                 itemsProcessed = processedCount,
                 message = summaryMsg
@@ -368,10 +373,16 @@ class GoogleSheetsSyncManager(
     ): Result<Int> = withContext(Dispatchers.IO) {
         var totalPushed = 0
         try {
-            // Check posted invoices in repository
-            val postedInvoices = repository.invoices.value.filter { it.status == "POSTED" }
-            if (postedInvoices.isNotEmpty()) {
-                val rows = postedInvoices.take(50).map { inv ->
+            // 1. Fetch pending sales transactions stored in local SQLite Room database
+            val pendingRoomInvoices = repository.getPendingOfflineInvoicesFromRoom()
+            val targetInvoices = if (pendingRoomInvoices.isNotEmpty()) {
+                pendingRoomInvoices
+            } else {
+                repository.invoices.value.filter { it.status == "POSTED" && it.syncStatus == "PENDING" }
+            }
+
+            if (targetInvoices.isNotEmpty()) {
+                val rows = targetInvoices.map { inv ->
                     listOf(
                         inv.invoiceId,
                         inv.invoiceNumber,
@@ -381,30 +392,223 @@ class GoogleSheetsSyncManager(
                         BahrainFinancials.formatBhd(inv.vatTotal),
                         BahrainFinancials.formatBhd(inv.total),
                         inv.paymentType,
-                        "VAN-MAIN",
+                        inv.vanCode.ifBlank { "VAN-MAIN" },
                         inv.createdBy,
                         inv.status
                     )
                 }
 
-                val appendResp = sheetsApiService.appendValues(
-                    authHeader = authHeader,
+                val appendResp = sheetsService.appendRows(
                     spreadsheetId = spreadsheetId,
                     range = "DailySalesLogs!A:K",
-                    body = GoogleValueRange(values = rows)
+                    rows = rows
                 )
-                if (appendResp.isSuccessful) {
-                    totalPushed += rows.size
+
+                appendResp.onSuccess { count ->
+                    totalPushed += count
+                    // Mark sales transactions as SYNCED in local SQLite Room database
+                    for (inv in targetInvoices) {
+                        repository.markInvoiceSyncedInRoom(inv.invoiceId)
+                    }
+                    Log.i(TAG, "Uploaded $count pending offline sales to Google Sheets 'DailySalesLogs' worksheet and marked SYNCED in Room.")
+                }.onFailure { err ->
+                    Log.w(TAG, "Direct Sheets append error for offline sales: ${err.message}")
                 }
             }
 
-            // Also invoke Firestore sales sync
+            // 2. Also flush pending items from Room sync queue and Firestore backup
             val pushResult = repository.pushFirestoreSalesToGoogleSheets()
             totalPushed += pushResult.getOrDefault(0)
+
+            val queueResult = repository.flushPendingRoomSyncQueue()
+            totalPushed += queueResult.getOrDefault(0)
 
             Result.success(totalPushed)
         } catch (e: Exception) {
             Log.w(TAG, "Push daily sales exception: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Pulls van fleet records from Google Sheets 'Vans!A2:I1000' and updates local repository.
+     */
+    suspend fun pullVansFromSheets(
+        authHeader: String,
+        spreadsheetId: String
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val response = sheetsApiService.getValues(authHeader, spreadsheetId, "Vans!A2:I1000")
+            if (!response.isSuccessful || response.body() == null) {
+                return@withContext Result.success(0)
+            }
+
+            val values = response.body()?.values ?: emptyList()
+            var count = 0
+            for (row in values) {
+                if (row.size < 4) continue
+                val vanId = row.getOrNull(0)?.toString()?.takeIf { it.isNotBlank() } ?: continue
+                val businessId = row.getOrNull(1)?.toString() ?: repository.getBusinessId()
+                val vanCode = row.getOrNull(2)?.toString() ?: ""
+                val vanName = row.getOrNull(3)?.toString() ?: ""
+                val regNo = row.getOrNull(4)?.toString() ?: ""
+                val spId = row.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
+                val spName = row.getOrNull(6)?.toString()?.takeIf { it.isNotBlank() }
+                val status = row.getOrNull(7)?.toString() ?: Van.STATUS_ACTIVE
+                val notes = row.getOrNull(8)?.toString() ?: ""
+
+                val van = Van(
+                    vanId = vanId,
+                    businessId = businessId,
+                    vanCode = vanCode,
+                    vanName = vanName,
+                    registrationNo = regNo,
+                    assignedSalespersonId = spId,
+                    assignedSalespersonName = spName,
+                    status = status,
+                    notes = notes
+                )
+                repository.upsertVanLocally(van)
+                count++
+            }
+            Result.success(count)
+        } catch (e: Exception) {
+            Log.w(TAG, "Pull vans exception: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Pushes local vans to Google Sheets 'Vans!A2:I'.
+     */
+    suspend fun pushVansToSheets(
+        authHeader: String,
+        spreadsheetId: String
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val vans = repository.vans.value
+            if (vans.isEmpty()) return@withContext Result.success(0)
+
+            val rows = vans.map { v ->
+                listOf(
+                    v.vanId,
+                    v.businessId,
+                    v.vanCode,
+                    v.vanName,
+                    v.registrationNo,
+                    v.assignedSalespersonId ?: "",
+                    v.assignedSalespersonName ?: "",
+                    v.status,
+                    v.notes
+                )
+            }
+
+            val range = "Vans!A2:I${rows.size + 1}"
+            val resp = sheetsApiService.updateValues(
+                authHeader = authHeader,
+                spreadsheetId = spreadsheetId,
+                range = range,
+                body = GoogleValueRange(range = range, values = rows)
+            )
+            if (resp.isSuccessful) {
+                Result.success(rows.size)
+            } else {
+                Result.success(0)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Push vans exception: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Pulls staff records from Google Sheets 'Staff!A2:I1000' and updates local repository.
+     */
+    suspend fun pullStaffFromSheets(
+        authHeader: String,
+        spreadsheetId: String
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val response = sheetsApiService.getValues(authHeader, spreadsheetId, "Staff!A2:I1000")
+            if (!response.isSuccessful || response.body() == null) {
+                return@withContext Result.success(0)
+            }
+
+            val values = response.body()?.values ?: emptyList()
+            var count = 0
+            for (row in values) {
+                if (row.size < 4) continue
+                val membershipId = row.getOrNull(0)?.toString()?.takeIf { it.isNotBlank() } ?: continue
+                val businessId = row.getOrNull(1)?.toString() ?: repository.getBusinessId()
+                val userId = row.getOrNull(2)?.toString() ?: java.util.UUID.randomUUID().toString()
+                val email = row.getOrNull(3)?.toString() ?: ""
+                val displayName = row.getOrNull(4)?.toString() ?: "Staff"
+                val role = row.getOrNull(5)?.toString() ?: "salesperson"
+                val vanCode = row.getOrNull(6)?.toString()?.takeIf { it.isNotBlank() }
+                val status = row.getOrNull(7)?.toString() ?: "ACTIVE"
+                val joinedAt = row.getOrNull(8)?.toString() ?: "2026-11-01"
+
+                val member = EmployeeMembership(
+                    membershipId = membershipId,
+                    businessId = businessId,
+                    businessName = repository.getBusinessName(),
+                    userId = userId,
+                    email = email,
+                    displayName = displayName,
+                    role = role,
+                    assignedVanCode = vanCode,
+                    status = status,
+                    joinedAt = joinedAt
+                )
+                repository.upsertStaffLocally(member)
+                count++
+            }
+            Result.success(count)
+        } catch (e: Exception) {
+            Log.w(TAG, "Pull staff exception: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Pushes local staff to Google Sheets 'Staff!A2:I'.
+     */
+    suspend fun pushStaffToSheets(
+        authHeader: String,
+        spreadsheetId: String
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val staff = repository.teamMemberships.value
+            if (staff.isEmpty()) return@withContext Result.success(0)
+
+            val rows = staff.map { m ->
+                listOf(
+                    m.membershipId,
+                    m.businessId,
+                    m.userId,
+                    m.email,
+                    m.displayName,
+                    m.role,
+                    m.assignedVanCode ?: "",
+                    m.status,
+                    m.joinedAt
+                )
+            }
+
+            val range = "Staff!A2:I${rows.size + 1}"
+            val resp = sheetsApiService.updateValues(
+                authHeader = authHeader,
+                spreadsheetId = spreadsheetId,
+                range = range,
+                body = GoogleValueRange(range = range, values = rows)
+            )
+            if (resp.isSuccessful) {
+                Result.success(rows.size)
+            } else {
+                Result.success(0)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Push staff exception: ${e.message}")
             Result.failure(e)
         }
     }

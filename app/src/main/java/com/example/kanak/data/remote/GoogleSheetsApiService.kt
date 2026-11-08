@@ -68,26 +68,26 @@ interface GoogleSheetsApiService {
 
     @GET("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}")
     suspend fun getSpreadsheet(
-        @Header("Authorization") authHeader: String,
+        @Header("Authorization") authHeader: String? = null,
         @Path("spreadsheetId") spreadsheetId: String
     ): Response<GoogleSpreadsheet>
 
     @POST("https://sheets.googleapis.com/v4/spreadsheets")
     suspend fun createSpreadsheet(
-        @Header("Authorization") authHeader: String,
+        @Header("Authorization") authHeader: String? = null,
         @Body request: GoogleSpreadsheetCreateRequest
     ): Response<GoogleSpreadsheet>
 
     @GET("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/{range}")
     suspend fun getValues(
-        @Header("Authorization") authHeader: String,
+        @Header("Authorization") authHeader: String? = null,
         @Path("spreadsheetId") spreadsheetId: String,
         @Path("range") range: String
     ): Response<GoogleValueRange>
 
     @PUT("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/{range}")
     suspend fun updateValues(
-        @Header("Authorization") authHeader: String,
+        @Header("Authorization") authHeader: String? = null,
         @Path("spreadsheetId") spreadsheetId: String,
         @Path("range") range: String,
         @Query("valueInputOption") valueInputOption: String = "USER_ENTERED",
@@ -96,7 +96,7 @@ interface GoogleSheetsApiService {
 
     @POST("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/{range}:append")
     suspend fun appendValues(
-        @Header("Authorization") authHeader: String,
+        @Header("Authorization") authHeader: String? = null,
         @Path("spreadsheetId") spreadsheetId: String,
         @Path("range") range: String,
         @Query("valueInputOption") valueInputOption: String = "USER_ENTERED",

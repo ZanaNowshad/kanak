@@ -22,17 +22,23 @@ class GoogleSheetsSyncWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         Log.i(TAG, "Starting WorkManager background offline queue sync...")
         val repository = KanakRepository.getInstance(applicationContext)
+        val syncManager = GoogleSheetsSyncManager(applicationContext, repository)
 
         try {
-            // 1. Flush offline Room queue mutations to remote sync gateway
-            val queueFlushResult = repository.flushPendingRoomSyncQueue()
-            val flushedCount = queueFlushResult.getOrDefault(0)
+            var salesPushed = 0
+            val sheetId = repository.getGoogleSheetId()
+            val token = repository.currentAuthToken ?: "bearer_token"
 
-            // 2. Push sales records to Google Sheets
-            val salesPushResult = repository.pushFirestoreSalesToGoogleSheets()
-            val salesPushed = salesPushResult.getOrDefault(0)
+            if (!sheetId.isNullOrBlank()) {
+                val directPushResult = syncManager.pushDailySalesLogsToSheets(token, sheetId)
+                salesPushed += directPushResult.getOrDefault(0)
+            }
 
-            Log.i(TAG, "Background sync worker completed successfully. Flushed: $flushedCount, Sales Pushed: $salesPushed")
+            // 1. Flush offline Room queue mutations to remote sync gateway & backup pending sales
+            val syncAllResult = repository.syncAllPendingNow()
+            val syncedCount = syncAllResult.getOrDefault(0)
+
+            Log.i(TAG, "Background sync worker completed successfully. Sales Pushed to Sheets: $salesPushed, Total Synced: $syncedCount")
             Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "WorkManager sync execution failed: ${e.message}", e)

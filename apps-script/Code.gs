@@ -54,7 +54,9 @@ function doPost(e) {
           purchases: getSheetData(ss, 'Purchases'),
           invoices: getSheetData(ss, 'Invoices'),
           invoice_lines: getSheetData(ss, 'InvoiceLines'),
-          stock_adjustments: getSheetData(ss, 'StockAdjustments')
+          stock_adjustments: getSheetData(ss, 'StockAdjustments'),
+          vans: getSheetData(ss, 'Vans'),
+          staff: getSheetData(ss, 'Staff')
         };
         break;
 

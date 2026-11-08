@@ -450,11 +450,11 @@ fun DashboardScreen(
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     QuickActionButton(
-                        title = if (isSalesperson) "Express Sale" else "New Sale",
-                        subtitle = if (isSalesperson) "Rapid 1-Tap" else "Issue Invoice",
-                        icon = if (isSalesperson) Icons.Default.FlashOn else Icons.Default.AddShoppingCart,
+                        title = "New Invoice",
+                        subtitle = "Issue Sale Invoice",
+                        icon = Icons.Default.AddShoppingCart,
                         iconBg = KanakPrimaryBlue,
-                        onClick = if (isSalesperson) onNavigateToExpressSales else onNavigateToNewInvoice,
+                        onClick = onNavigateToNewInvoice,
                         modifier = Modifier.weight(1f)
                     )
                     QuickActionButton(

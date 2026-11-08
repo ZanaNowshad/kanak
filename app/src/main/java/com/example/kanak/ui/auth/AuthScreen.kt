@@ -323,7 +323,7 @@ fun AuthScreen(
                             Button(
                                 onClick = {
                                     scope.launch {
-                                        authManager.signInWithGoogle()
+                                        authManager.signInWithGoogle(activityContext = context)
                                     }
                                 },
                                 modifier = Modifier
@@ -358,6 +358,38 @@ fun AuthScreen(
                                         fontSize = 15.sp
                                     )
                                 )
+                            }
+
+                            // Optional Demo Sign-In Shortcut for Testing & Offline Preview
+                            Surface(
+                                color = KanakSurfaceVariant.copy(alpha = 0.6f),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Test Preview:",
+                                        style = MaterialTheme.typography.labelSmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        TextButton(
+                                            onClick = { authManager.signInAsDemo(asAdmin = false) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("New Business Wizard", fontSize = 11.sp, color = KanakPrimaryBlue, fontWeight = FontWeight.Bold)
+                                        }
+                                        TextButton(
+                                            onClick = { authManager.signInAsDemo(asAdmin = true) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("Super Admin Demo", fontSize = 11.sp, color = KanakPrimaryBlue, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
                             }
                         }
 

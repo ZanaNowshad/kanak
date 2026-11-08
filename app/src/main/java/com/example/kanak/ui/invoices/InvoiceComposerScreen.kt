@@ -75,6 +75,7 @@ fun InvoiceComposerScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var selectedPaymentType by remember { mutableStateOf(Invoice.PAYMENT_CASH) }
     var showBarcodeScanDialog by remember { mutableStateOf(false) }
+    var autoPrintReceipt by remember { mutableStateOf(true) }
 
     // Calculate live totals
     val calculatedLines = remember(cartItems, allProducts) {
@@ -302,7 +303,38 @@ fun InvoiceComposerScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    val context = androidx.compose.ui.platform.LocalContext.current
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { autoPrintReceipt = !autoPrintReceipt }
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Checkbox(
+                            checked = autoPrintReceipt,
+                            onCheckedChange = { autoPrintReceipt = it }
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Default.Print,
+                            contentDescription = null,
+                            tint = KanakPrimaryBlue,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Auto-Print ESC/POS Receipt on Post",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                color = KanakPrimaryText
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Big Primary Save Invoice Button
                     Button(
@@ -339,6 +371,17 @@ fun InvoiceComposerScreen(
 
                                 isSaving = false
                                 result.onSuccess { committedInvoice ->
+                                    if (autoPrintReceipt) {
+                                        try {
+                                            com.example.kanak.printing.KanakAndroidPrintHelper.printInvoiceReceipt(
+                                                context = context,
+                                                invoice = committedInvoice,
+                                                businessName = repository.getBusinessName(),
+                                                vatNumber = repository.getVatNumber(),
+                                                crNumber = "123456-1"
+                                            )
+                                        } catch (_: Exception) {}
+                                    }
                                     onNavigateToInvoiceDetail(committedInvoice.invoiceId)
                                 }.onFailure { err ->
                                     errorMessage = err.message ?: "Failed to post invoice"
@@ -363,7 +406,7 @@ fun InvoiceComposerScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = if (selectedPaymentType == Invoice.PAYMENT_CREDIT) "Post Credit Invoice (${BahrainFinancials.formatBhd(totals.total)})" else "Save Invoice (${BahrainFinancials.formatBhd(totals.total)})",
+                            text = if (selectedPaymentType == Invoice.PAYMENT_CREDIT) "Post Credit Invoice (${BahrainFinancials.formatBhd(totals.total)})" else "Save & Print Invoice (${BahrainFinancials.formatBhd(totals.total)})",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                     }

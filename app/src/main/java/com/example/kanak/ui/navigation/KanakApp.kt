@@ -35,10 +35,9 @@ import com.example.kanak.ui.invoices.InvoiceDetailScreen
 import com.example.kanak.ui.invoices.InvoicesHistoryScreen
 import com.example.kanak.ui.more.MoreHubScreen
 import com.example.kanak.ui.products.AddEditProductScreen
-import com.example.kanak.ui.products.ProductsScreen
 import com.example.kanak.ui.purchases.PurchasesScreen
+import com.example.kanak.ui.reports.ReportsScreen
 import com.example.kanak.ui.sales.DailySalesSummaryScreen
-import com.example.kanak.ui.sales.ExpressSalesScreen
 import com.example.kanak.ui.settings.SettingsScreen
 import com.example.kanak.ui.stock.StockScreen
 import com.example.kanak.ui.suppliers.SuppliersScreen
@@ -47,9 +46,9 @@ import com.example.ui.theme.*
 
 enum class PrimaryTab(val label: String) {
     HOME("Home"),
-    SELL("Sell"),
     INVOICES("Invoices"),
     PRODUCTS("Products"),
+    REPORTS("Reports"),
     MORE("More")
 }
 
@@ -57,7 +56,7 @@ sealed class Screen {
     object TabView : Screen()
     data class AddEditProduct(val productId: String?) : Screen()
     object InvoiceComposer : Screen()
-    object ExpressSales : Screen()
+    object Reports : Screen()
     data class InvoiceDetail(val invoiceId: String) : Screen()
     object Purchases : Screen()
     object Suppliers : Screen()
@@ -176,28 +175,19 @@ fun KanakApp(
                     },
                     modifier = modifier
                 )
-            } else if (!isMasterAdmin && (licenseState == LicenseState.UNREGISTERED || reEditingRegistration)) {
-                CompanyRegistrationScreen(
-                    licenseManager = licenseManager,
+            } else if (!isMasterAdmin && !repository.isBusinessSetupCompleted(effectiveUser.email)) {
+                com.example.kanak.ui.wizard.BusinessSetupWizardScreen(
+                    repository = repository,
                     currentUser = effectiveUser,
-                    onRegistrationCompleted = {
-                        reEditingRegistration = false
-                    },
-                    onNavigateToJoinBusiness = {
-                        showingJoinBusiness = true
-                    },
-                    modifier = modifier
-                )
-            } else if (!isMasterAdmin && licenseState == LicenseState.PENDING_ACTIVATION) {
-                ActivationGateScreen(
+                    bootstrapCloudManager = bootstrapCloudManager,
                     licenseManager = licenseManager,
-                    onActivationSuccess = {
+                    onSetupComplete = {
                         reEditingRegistration = false
                     },
-                    onReEditRegistration = {
-                        reEditingRegistration = true
+                    onSignOut = {
+                        authManager.signOut()
                     },
-                    onNavigateToJoinBusiness = {
+                    onNavigateToJoin = {
                         showingJoinBusiness = true
                     },
                     modifier = modifier
@@ -262,9 +252,9 @@ private fun AuthenticatedApp(
                                     Icon(
                                         imageVector = when (tab) {
                                             PrimaryTab.HOME -> if (isSelected) Icons.Filled.Home else Icons.Outlined.Home
-                                            PrimaryTab.SELL -> if (isSelected) Icons.Filled.PointOfSale else Icons.Outlined.PointOfSale
                                             PrimaryTab.INVOICES -> if (isSelected) Icons.Filled.ReceiptLong else Icons.Outlined.ReceiptLong
                                             PrimaryTab.PRODUCTS -> if (isSelected) Icons.Filled.Inventory2 else Icons.Outlined.Inventory2
+                                            PrimaryTab.REPORTS -> if (isSelected) Icons.Filled.Assessment else Icons.Outlined.Assessment
                                             PrimaryTab.MORE -> if (isSelected) Icons.Filled.MoreHoriz else Icons.Outlined.MoreHoriz
                                         },
                                         contentDescription = tab.label
@@ -316,7 +306,7 @@ private fun AuthenticatedApp(
                                 currentUser = currentUser,
                                 isMasterAdmin = isMasterAdmin,
                                 onNavigateToNewInvoice = { currentScreen = Screen.InvoiceComposer },
-                                onNavigateToExpressSales = { selectedTab = PrimaryTab.SELL },
+                                onNavigateToExpressSales = { currentScreen = Screen.InvoiceComposer },
                                 onNavigateToSettings = { currentScreen = Screen.Settings },
                                 onNavigateToDailySalesSummary = { currentScreen = Screen.DailySalesSummary },
                                 onNavigateToFleet = { currentScreen = Screen.FleetManagement },
@@ -324,16 +314,6 @@ private fun AuthenticatedApp(
                                 onNavigateToProducts = { selectedTab = PrimaryTab.PRODUCTS },
                                 onNavigateToCustomers = { currentScreen = Screen.Customers },
                                 onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
-                                modifier = Modifier.padding(innerPadding)
-                            )
-                        }
-                        PrimaryTab.SELL -> {
-                            ExpressSalesScreen(
-                                repository = repository,
-                                currentUser = currentUser,
-                                printerManager = printerManager,
-                                onNavigateToInvoiceDetail = { id -> currentScreen = Screen.InvoiceDetail(id) },
-                                onNavigateBack = { selectedTab = PrimaryTab.HOME },
                                 modifier = Modifier.padding(innerPadding)
                             )
                         }
@@ -346,10 +326,18 @@ private fun AuthenticatedApp(
                             )
                         }
                         PrimaryTab.PRODUCTS -> {
-                            ProductsScreen(
+                            com.example.kanak.ui.products.ProductsScreen(
                                 repository = repository,
                                 onNavigateToAddProduct = { currentScreen = Screen.AddEditProduct(null) },
                                 onNavigateToEditProduct = { prodId -> currentScreen = Screen.AddEditProduct(prodId) },
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
+                        PrimaryTab.REPORTS -> {
+                            ReportsScreen(
+                                repository = repository,
+                                currentUser = currentUser,
+                                onNavigateBack = { selectedTab = PrimaryTab.HOME },
                                 modifier = Modifier.padding(innerPadding)
                             )
                         }
@@ -362,7 +350,7 @@ private fun AuthenticatedApp(
                                 onNavigateToPurchases = { currentScreen = Screen.Purchases },
                                 onNavigateToSuppliers = { currentScreen = Screen.Suppliers },
                                 onNavigateToFleet = { currentScreen = Screen.FleetManagement },
-                                onNavigateToReports = { currentScreen = Screen.DailySalesSummary },
+                                onNavigateToReports = { selectedTab = PrimaryTab.REPORTS },
                                 onNavigateToTeam = { currentScreen = Screen.TeamManagement },
                                 onNavigateToSettings = { currentScreen = Screen.Settings },
                                 onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
@@ -384,13 +372,11 @@ private fun AuthenticatedApp(
             )
         }
 
-        is Screen.ExpressSales -> {
+        is Screen.Reports -> {
             BackHandler { currentScreen = Screen.TabView }
-            com.example.kanak.ui.sales.ExpressSalesScreen(
+            ReportsScreen(
                 repository = repository,
                 currentUser = currentUser,
-                printerManager = printerManager,
-                onNavigateToInvoiceDetail = { id -> currentScreen = Screen.InvoiceDetail(id) },
                 onNavigateBack = { currentScreen = Screen.TabView }
             )
         }
