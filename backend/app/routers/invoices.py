@@ -24,8 +24,15 @@ def get_invoices(
     tenant_id: str = Query(...),
     van_id: str = Query(None),
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_authenticated_user)
 ):
+    if user.role.upper() == "VAN_REP":
+        if not user.assigned_van_id:
+            raise HTTPException(status_code=403, detail="No assigned van")
+        if van_id and van_id != user.assigned_van_id:
+            raise HTTPException(status_code=403, detail="Assigned van required")
+        van_id = user.assigned_van_id
     q = db.query(Invoice).filter(Invoice.tenant_id == tenant_id)
     if van_id:
         q = q.filter(Invoice.van_id == van_id)
@@ -34,6 +41,9 @@ def get_invoices(
 @router.post("", response_model=InvoiceResponse)
 def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db),
                    user: User = Depends(get_authenticated_user)):
+    if user.role.upper() == "VAN_REP":
+        if not user.assigned_van_id or req.van_id != user.assigned_van_id:
+            raise HTTPException(status_code=403, detail="Salesperson can only sell from assigned van")
     if not req.lines:
         raise HTTPException(status_code=400, detail="Invoice must contain at least one line item")
     if not req.invoice_number.strip():
@@ -201,7 +211,7 @@ def generate_tax_invoice_pdf(invoice_id: str, db: Session = Depends(get_db),
     p.setFont("Helvetica-Bold", 20)
     p.drawString(40, height - 45, tenant.company_name if tenant else "KANAK FMCG Wholesale")
     p.setFont("Helvetica", 11)
-    p.drawString(40, height - 65, "KINGDOM OF BAHRAIN • TAX INVOICE / فاتورة ضريبية")
+    p.drawString(40, height - 65, "TAX INVOICE" if tenant and tenant.trn_number else "SALES INVOICE - TRN NOT PROVIDED")
 
     # NBR VAT Metadata
     p.setFillColor(colors.black)
@@ -218,12 +228,12 @@ def generate_tax_invoice_pdf(invoice_id: str, db: Session = Depends(get_db),
     p.setFont("Helvetica-Bold", 10)
     p.drawString(340, height - 110, "Supplier TRN:")
     p.setFont("Helvetica", 10)
-    p.drawString(430, height - 110, tenant.trn_number if tenant and tenant.trn_number else "200000000000002")
+    p.drawString(430, height - 110, tenant.trn_number if tenant and tenant.trn_number else "Not provided")
 
     p.setFont("Helvetica-Bold", 10)
     p.drawString(340, height - 125, "Supplier CR:")
     p.setFont("Helvetica", 10)
-    p.drawString(430, height - 125, tenant.cr_number if tenant and tenant.cr_number else "123456-1")
+    p.drawString(430, height - 125, tenant.cr_number if tenant and tenant.cr_number else "Not provided")
 
     # Customer Information Box
     p.setStrokeColor(colors.HexColor("#B0BEC5"))

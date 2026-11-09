@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
+import uuid
 from decimal import Decimal
 from pydantic import BaseModel
 from backend.app.database import get_db
@@ -44,6 +45,8 @@ def create_van(req: VanCreate, db: Session = Depends(get_db)):
 @router.get("/vans/{van_id}/stock", response_model=List[VanStockAllowanceItem])
 def get_van_stock(van_id: str, db: Session = Depends(get_db),
                   user: User = Depends(get_authenticated_user)):
+    if user.role.upper() == "VAN_REP" and user.assigned_van_id != van_id:
+        raise HTTPException(status_code=403, detail="Assigned van required")
     van = db.query(Van).filter(Van.id == van_id, Van.tenant_id == user.tenant_id).first()
     if van is None:
         raise HTTPException(status_code=404, detail="Van not found")
@@ -65,7 +68,8 @@ def get_van_stock(van_id: str, db: Session = Depends(get_db),
     return results
 
 @router.post("/vans/transfer")
-def transfer_stock(req: VanStockTransferRequest, db: Session = Depends(get_db)):
+def transfer_stock(req: VanStockTransferRequest, db: Session = Depends(get_db),
+                   user: User = Depends(get_authenticated_user)):
     """
     Executes a stock transfer between warehouse and van with ledger tracking.
     """
@@ -73,16 +77,19 @@ def transfer_stock(req: VanStockTransferRequest, db: Session = Depends(get_db)):
     if not van:
         raise HTTPException(status_code=404, detail="Van not found")
 
-    prod = db.query(Product).filter(Product.id == req.product_id, Product.tenant_id == req.tenant_id).first()
+    prod = db.query(Product).filter(Product.id == req.product_id, Product.tenant_id == req.tenant_id).with_for_update().first()
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
 
     qty = Decimal(str(req.quantity))
+    if not qty.is_finite() or qty <= 0 or qty.as_tuple().exponent < -3:
+        raise HTTPException(status_code=422, detail="Transfer quantity must be positive with at most three decimals")
 
     allowance = db.query(VanStockAllowance).filter(
         VanStockAllowance.van_id == req.van_id,
-        VanStockAllowance.product_id == req.product_id
-    ).first()
+        VanStockAllowance.product_id == req.product_id,
+        VanStockAllowance.tenant_id == req.tenant_id
+    ).with_for_update().first()
 
     if req.transfer_type == "LOAD_TO_VAN":
         if prod.warehouse_stock < qty:
@@ -118,7 +125,7 @@ def transfer_stock(req: VanStockTransferRequest, db: Session = Depends(get_db)):
 
     ledger_entry = StockLedger(
         tenant_id=req.tenant_id,
-        movement_id=f"MOV-TRF-{van.van_code}-{prod.barcode}-{qty}",
+        movement_id=f"MOV-TRF-{uuid.uuid4()}",
         movement_type=movement_type,
         product_id=prod.id,
         source_location=src,
@@ -127,7 +134,7 @@ def transfer_stock(req: VanStockTransferRequest, db: Session = Depends(get_db)):
         unit_cost=prod.unit_cost,
         total_value=qty * prod.unit_price,
         reference_document=f"TRF-{van.van_code}",
-        created_by=req.performed_by
+        created_by=user.id
     )
     db.add(ledger_entry)
     db.commit()

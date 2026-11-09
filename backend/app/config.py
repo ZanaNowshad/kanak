@@ -5,7 +5,7 @@ from decimal import Decimal
 class Settings(BaseSettings):
     APP_NAME: str = "KANAK Authoritative Backend"
     API_V1_STR: str = "/api/v1"
-    SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "kanak_production_secret_key_change_in_env_2026")
+    SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     FIREBASE_CREDENTIALS_JSON: str = os.getenv("FIREBASE_CREDENTIALS_JSON", "")
 
     # Master Platform Administrator
-    MASTER_ADMIN_EMAIL: str = os.getenv("MASTER_ADMIN_EMAIL", "zanabalmuhamed@gmail.com")
+    MASTER_ADMIN_EMAIL: str = os.getenv("MASTER_ADMIN_EMAIL", "")
 
     # Google Sheets API Gateway
     GOOGLE_SHEETS_SPREADSHEET_ID: str = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")

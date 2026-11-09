@@ -1,62 +1,14 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
-    function isValidUser(data) {
-      return data.keys().hasAll(['userId', 'email', 'role', 'active']) &&
-        data.userId is string &&
-        data.email is string &&
-        data.role in ['admin', 'standard'] &&
-        data.active is bool;
-    }
-
-    function isValidInvoice(data) {
-      return data.keys().hasAll(['invoiceId', 'invoiceNumber', 'customerId', 'customerName', 'date', 'subtotal', 'vatTotal', 'total', 'status', 'userId']) &&
-        data.invoiceId is string &&
-        data.invoiceNumber is string &&
-        data.customerId is string &&
-        data.customerName is string &&
-        data.date is string &&
-        data.subtotal is string &&
-        data.vatTotal is string &&
-        data.total is string &&
-        data.status in ['POSTED', 'VOID'] &&
-        data.userId is string;
-    }
-
-    // Users Collection
+    // PostgreSQL owns tenant roles and financial writes. Deny all direct
+    // client writes until server-provisioned, tenant-scoped paths exist.
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isOwner(userId) && isValidUser(request.resource.data);
-      allow delete: if false;
+      allow get: if request.auth != null && request.auth.uid == userId;
+      allow list, create, update, delete: if false;
     }
-
-    // Invoices Collection (Cloud Backup / Fleet Sync)
-    match /invoices/{invoiceId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() &&
-        request.resource.data.userId == request.auth.uid &&
-        isValidInvoice(request.resource.data);
-      allow update: if isAuthenticated() &&
-        (request.resource.data.userId == request.auth.uid || resource.data.userId == request.auth.uid) &&
-        isValidInvoice(request.resource.data);
-      allow delete: if false;
-    }
-
-    // Company Registrations & License Activation Requests
-    match /company_registrations/{requestId} {
-      allow read: if true;
-      allow create: if request.resource.data.requestId == requestId;
-      allow update: if isAuthenticated();
-      allow delete: if false;
-    }
+    match /invoices/{invoiceId} { allow read, write: if false; }
+    match /company_registrations/{registrationId} { allow read, write: if false; }
+    match /{document=**} { allow read, write: if false; }
   }
 }

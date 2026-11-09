@@ -7,10 +7,8 @@ services:
     restart: always
     environment:
       POSTGRES_USER: kanak_user
-      POSTGRES_PASSWORD: kanak_pass_secure_2026
+      POSTGRES_PASSWORD: ${KANAK_DB_PASSWORD:?Set KANAK_DB_PASSWORD in a private environment file}
       POSTGRES_DB: kanak_db
-    ports:
-      - "5432:5432"
     volumes:
       - kanak_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -29,8 +27,7 @@ services:
       kanak-db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://kanak_user:kanak_pass_secure_2026@kanak-db:5432/kanak_db
-      MASTER_ADMIN_EMAIL: zanabalmuhamed@gmail.com
+      DATABASE_URL: postgresql://kanak_user:${KANAK_DB_PASSWORD:?Set KANAK_DB_PASSWORD in a private environment file}@kanak-db:5432/kanak_db
       BAHRAIN_VAT_RATE: "0.100"
     ports:
       - "8000:8000"

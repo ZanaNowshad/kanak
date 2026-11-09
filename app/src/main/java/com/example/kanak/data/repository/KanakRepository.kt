@@ -137,10 +137,7 @@ class KanakRepository(private val context: Context) {
 
     init {
         loadLocalDatabase()
-        // Strictly purge any legacy mock FMCG data to ensure 100% clean production state
-        if (_products.value.any { it.productId.startsWith("prod_00") || it.name.contains("Almarai", ignoreCase = true) }) {
-            clearAllData()
-        }
+        // Never delete persisted data based on product names or ID patterns.
         recalculateDashboard()
         setupNetworkMonitoring()
         refreshPendingSyncCount()
