@@ -223,7 +223,7 @@ class GoogleAuthManager(private val context: Context) {
             val credential = result.credential
             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
-                val email = googleIdTokenCredential.id
+                val credentialEmail = googleIdTokenCredential.id
                 val idToken = googleIdTokenCredential.idToken
 
                 // 1. Authenticate with Firebase Auth - FAIL CLOSED
@@ -245,6 +245,7 @@ class GoogleAuthManager(private val context: Context) {
                     return@withContext errorState
                 }
 
+                val email = firebaseUser.email?.trim()?.lowercase() ?: return@withContext AuthState.Error("Verified account email unavailable").also { _authState.value = it }
                 val realUserId = firebaseUser.uid
 
                 // 2. Query Firestore /users/{uid} for server-enforced role and active state
@@ -260,24 +261,10 @@ class GoogleAuthManager(private val context: Context) {
                         role = doc.getString("role") ?: User.ROLE_STANDARD
                         assignedVanId = doc.getString("assignedVanId")
                         assignedVanCode = doc.getString("assignedVanCode")
-                    } else {
-                        // First-time user profile creation:
-                        // Only designated admin emails receive owner/admin status; all others default to STANDARD
-                        if (email.trim().equals("zanabalmuhamed@gmail.com", ignoreCase = true) ||
-                            email.trim().equals("admin@kanak-fmcg.bh", ignoreCase = true)) {
-                            role = User.ROLE_OWNER
-                        } else {
-                            role = User.ROLE_STANDARD
-                        }
                     }
                 } catch (e: Exception) {
-                    Log.w("GoogleAuthManager", "Could not fetch user profile from Firestore: ${e.message}")
-                    // If network fails during role check, only permit master admin email as owner, others as standard
-                    if (email.trim().equals("zanabalmuhamed@gmail.com", ignoreCase = true)) {
-                        role = User.ROLE_OWNER
-                    } else {
-                        role = User.ROLE_STANDARD
-                    }
+                    Log.w("GoogleAuthManager", "Could not load Firestore role", e)
+                    // Keep the STANDARD role until an authenticated company setup is complete.
                 }
 
                 // Check active status
