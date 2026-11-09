@@ -6,6 +6,8 @@ import com.example.kanak.data.remote.GatewayRequest
 import com.example.kanak.data.remote.KanakApiService
 import com.example.kanak.data.remote.KanakBackendApiService
 import com.example.kanak.data.remote.RegisterCompanyRequest
+import com.example.kanak.data.remote.OutboxUploadItem
+import com.example.kanak.data.remote.OutboxUploadRequest
 import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.domain.models.*
 import com.example.kanak.images.BingThumbnailUrlBuilder
@@ -1032,6 +1034,7 @@ class KanakRepository(private val context: Context) {
                 // Queue for background sync
                 val payloadMap = mapOf(
                     "invoice_id" to invoice.invoiceId,
+                    "van_id" to invoice.vanId,
                     "invoice_number" to invoice.invoiceNumber,
                     "customer_id" to invoice.customerId,
                     "customer_name" to invoice.customerName,
@@ -1823,32 +1826,50 @@ class KanakRepository(private val context: Context) {
         return try {
             val pending = roomDb.syncQueueDao().getPendingItems()
             if (pending.isEmpty()) return Result.success(0)
-            val gatewayUrl = getGatewayUrl()?.takeIf { it.isNotBlank() }
-                ?: return Result.failure(IllegalStateException("Transaction gateway is not configured"))
             val token = currentAuthToken?.takeIf { it.isNotBlank() }
-                ?: return Result.failure(IllegalStateException("Sign in before syncing queued operations"))
+                ?: return Result.failure(IllegalStateException("Firebase session is required for syncing"))
+            val tenantId = getBusinessId().takeIf { it.isNotBlank() }
+                ?: return Result.failure(IllegalStateException("Authoritative company registration required"))
+            val deviceId = prefs.getString("device_installation_id", null)
+                ?: UUID.randomUUID().toString().also {
+                    prefs.edit().putString("device_installation_id", it).apply()
+                }
             var sent = 0
             val failures = mutableListOf<String>()
             for (item in pending) {
                 try {
+                    if (item.action != "create_invoice")
+                        error("Unsupported offline mutation; server validation required")
                     @Suppress("UNCHECKED_CAST")
                     val payload = moshi.adapter(Map::class.java).fromJson(item.payloadJson) as? Map<String, Any?>
-                        ?: error("Unreadable queued operation")
-                    val response = apiService.executeGatewayAction(
-                        gatewayUrl, GatewayRequest(item.action, token, payload)
+                        ?: error("Unreadable queued invoice")
+                    val invoiceId = payload["invoice_id"]?.toString()
+                        ?.takeIf { it.isNotBlank() } ?: error("Missing invoice operation ID")
+                    val assignedVan = payload["van_id"]?.toString()?.takeIf { it.isNotBlank() }
+                    val request = OutboxUploadRequest(
+                        tenantId = tenantId,
+                        deviceId = deviceId,
+                        vanId = assignedVan,
+                        items = listOf(OutboxUploadItem(
+                            operation = "INSERT_INVOICE",
+                            entityId = invoiceId,
+                            payload = payload,
+                            timestamp = getBahrainTimestampString()
+                        ))
                     )
-                    if (!response.isSuccessful || response.body()?.success != true)
-                        error(response.body()?.error ?: "Gateway HTTP ${response.code()}")
+                    val response = backendApiService.flushOutbox("Bearer $token", request)
+                    val result = response.body()
+                    if (!response.isSuccessful || result?.acknowledgedIds?.contains(invoiceId) != true)
+                        error(result?.errors?.joinToString("; ") ?: "Backend HTTP ${response.code()}")
                     roomDb.withTransaction {
-                        val invoiceId = payload["invoice_id"]?.toString()
-                        if (item.action == "create_invoice" && !invoiceId.isNullOrBlank())
-                            roomDb.invoiceDao().updateSyncStatus(
-                                invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED
-                            )
+                        roomDb.invoiceDao().updateSyncStatus(
+                            invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED
+                        )
                         roomDb.syncQueueDao().deleteById(item.queueId)
                     }
                     sent++
                 } catch (e: Exception) {
+                    // Keep it pending until the server explicitly acknowledges this UUID.
                     roomDb.syncQueueDao().markFailed(item.queueId, e.message)
                     failures.add("Queue ${item.queueId}: ${e.message}")
                 }
