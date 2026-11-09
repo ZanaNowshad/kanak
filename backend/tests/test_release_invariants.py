@@ -68,6 +68,9 @@ def retail_client():
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason="P0: negative van transfer is accepted and corrupts stock")
 def test_negative_van_load_must_be_rejected(retail_client):
     client, db = retail_client
+    administrator = db.query(User).filter(User.id == "salesperson-a").one()
+    administrator.role = "COMPANY_ADMIN"
+    db.commit()
     resp = client.post("/api/v1/fleet/vans/transfer", json={
         "tenant_id": "tenant-a", "van_id": "van-own", "product_id": "prod-a",
         "quantity": "-2.000", "transfer_type": "LOAD_TO_VAN",
@@ -79,6 +82,9 @@ def test_negative_van_load_must_be_rejected(retail_client):
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason="P0: negative warehouse stock adjustment is accepted")
 def test_negative_stock_adjustment_must_be_rejected(retail_client):
     client, db = retail_client
+    administrator = db.query(User).filter(User.id == "salesperson-a").one()
+    administrator.role = "COMPANY_ADMIN"
+    db.commit()
     resp = client.post("/api/v1/inventory/adjust", json={
         "tenant_id": "tenant-a", "product_id": "prod-a",
         "new_quantity": "-5.000", "reason": "QA negative inventory",
