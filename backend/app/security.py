@@ -54,7 +54,10 @@ def get_authenticated_user(
                             headers={"WWW-Authenticate": "Bearer"})
     decoded = verify_firebase_identity(token.strip())
     email = decoded["email"].strip().lower()
-    user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
+    subject = decoded.get("uid") or decoded.get("sub")
+    user = db.query(User).filter(
+        User.firebase_uid == subject, User.email == email, User.is_active.is_(True)
+    ).first()
     if user is None:
         raise HTTPException(status_code=403, detail="No active company membership")
     tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id, Tenant.is_active.is_(True)).first()

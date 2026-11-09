@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 from backend.app.database import get_db
 from backend.app.models.entities import User, Tenant
 from backend.app.security import verify_firebase_identity
+from backend.app.schemas.schemas import TenantCreate
+from sqlalchemy.exc import IntegrityError
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -35,7 +37,10 @@ def verify_user_and_tenant(req: TokenVerifyRequest, db: Session = Depends(get_db
     email = claims["email"].strip().lower()
     if req.email and req.email.strip().lower() != email:
         raise HTTPException(status_code=403, detail="Requested email differs from verified identity")
-    user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
+    subject = claims.get("uid") or claims.get("sub")
+    user = db.query(User).filter(
+        User.firebase_uid == subject, User.email == email, User.is_active.is_(True)
+    ).first()
     if user is None:
         raise HTTPException(status_code=403, detail="An administrator must approve company membership")
     tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id, Tenant.is_active.is_(True)).first()
@@ -52,4 +57,70 @@ def verify_user_and_tenant(req: TokenVerifyRequest, db: Session = Depends(get_db
         cr_number=tenant.cr_number,
         trn_number=tenant.trn_number,
         assigned_van_id=user.assigned_van_id,
+    )
+
+
+@router.post("/companies", response_model=UserAuthResponse, status_code=201)
+def register_company(
+    req: TenantCreate,
+    authorization: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Create one authoritative company and its owner from a verified Firebase UID.
+
+    No client-provided role, tenant_id, email or arbitrary audit actor is accepted.
+    Existing accounts must use the reviewed membership/invitation flow.
+    """
+    kind, sep, bearer = authorization.strip().partition(" ")
+    if not sep or kind.lower() != "bearer" or not bearer.strip():
+        raise HTTPException(status_code=401, detail="Bearer authentication required")
+    claims = verify_firebase_identity(bearer.strip())
+    email = claims["email"].strip().lower()
+    subject = claims.get("uid") or claims.get("sub")
+    if not req.company_name.strip():
+        raise HTTPException(status_code=422, detail="Company name is required")
+    if db.query(User).filter(
+        (User.email == email) | (User.firebase_uid == subject)
+    ).first():
+        raise HTTPException(status_code=409, detail="Account already belongs to a company")
+    cr_number = (req.cr_number or "").strip()
+    if cr_number and db.query(Tenant).filter(Tenant.cr_number == cr_number).first():
+        raise HTTPException(status_code=409, detail="Commercial registration already registered")
+
+    tenant = Tenant(
+        company_name=req.company_name.strip(),
+        cr_number=cr_number or None,
+        trn_number=(req.trn_number or "").strip() or None,
+        phone=(req.phone or "").strip() or None,
+        address=(req.address or "").strip() or None,
+        is_active=True,
+    )
+    try:
+        db.add(tenant)
+        db.flush()
+        owner = User(
+            tenant_id=tenant.id,
+            firebase_uid=subject,
+            email=email,
+            full_name=str(claims.get("name") or email.split("@")[0])[:255],
+            role="COMPANY_ADMIN",
+            is_active=True,
+        )
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Company or account already registered") from error
+
+    return UserAuthResponse(
+        user_id=owner.id,
+        email=owner.email,
+        full_name=owner.full_name,
+        role=owner.role,
+        tenant_id=tenant.id,
+        company_name=tenant.company_name,
+        cr_number=tenant.cr_number,
+        trn_number=tenant.trn_number,
+        assigned_van_id=None,
     )

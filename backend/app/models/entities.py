@@ -33,6 +33,7 @@ class User(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
+    firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
     full_name = Column(String(255), nullable=False)
     role = Column(String(32), default="VAN_REP", nullable=False) # SUPER_ADMIN, COMPANY_ADMIN, VAN_REP, ACCOUNTANT
     assigned_van_id = Column(String(36), ForeignKey("vans.id", ondelete="SET NULL"), nullable=True)
