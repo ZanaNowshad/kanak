@@ -32,9 +32,15 @@ def get_invoices(
     return q.order_by(Invoice.date.desc()).limit(limit).all()
 
 @router.post("", response_model=InvoiceResponse)
-def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
+def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db),
+                   user: User = Depends(get_authenticated_user)):
     if not req.lines:
         raise HTTPException(status_code=400, detail="Invoice must contain at least one line item")
+    if not req.invoice_number.strip():
+        raise HTTPException(status_code=400, detail="Invoice number is required")
+    existing = db.query(Invoice).filter(Invoice.invoice_number == req.invoice_number.strip()).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Duplicate invoice number: inspect existing invoice before retrying")
 
     # Tenant-bound object validation; never decrement inventory in another company.
     if req.van_id is not None:
@@ -42,7 +48,7 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
         if van is None:
             raise HTTPException(status_code=404, detail="Van not found")
     # Verify customer
-    customer = db.query(Customer).filter(Customer.id == req.customer_id, Customer.tenant_id == req.tenant_id).first()
+    customer = db.query(Customer).filter(Customer.id == req.customer_id, Customer.tenant_id == req.tenant_id).with_for_update().first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
@@ -58,6 +64,8 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
                                            Product.is_active.is_(True)).first()
         if product is None:
             raise HTTPException(status_code=404, detail="Product not found")
+        if Decimal(str(item.unit_price)) != Decimal(str(product.unit_price)) or Decimal(str(item.vat_rate)) != Decimal(str(product.vat_rate)):
+            raise HTTPException(status_code=409, detail="Product pricing changed; refresh the invoice")
         qty = quantize_bhd(Decimal(str(item.quantity)))
         unit_price = quantize_bhd(Decimal(str(item.unit_price)))
         vat_rate = quantize_bhd(Decimal(str(item.vat_rate)))
@@ -75,7 +83,7 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
 
         processed_lines.append({
             "product_id": item.product_id,
-            "product_name": item.product_name,
+            "product_name": product.name,
             "quantity": qty,
             "unit_price": unit_price,
             "vat_rate": vat_rate,
@@ -98,7 +106,7 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
     invoice = Invoice(
         id=invoice_id,
         tenant_id=req.tenant_id,
-        invoice_number=req.invoice_number,
+        invoice_number=req.invoice_number.strip(),
         van_id=req.van_id,
         customer_id=customer.id,
         customer_name=customer.name,
@@ -109,12 +117,12 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
         total=invoice_grand_total,
         payment_mode=req.payment_mode.upper(),
         status="POSTED",
-        created_by=req.created_by
+        created_by=user.id
     )
     db.add(invoice)
 
     # Process lines & deduct stock
-    for pline in processed_lines:
+    for index, pline in enumerate(processed_lines):
         line_entity = InvoiceLine(
             id=str(uuid.uuid4()),
             invoice_id=invoice_id,
@@ -134,17 +142,24 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
                 VanStockAllowance.van_id == req.van_id,
                 VanStockAllowance.tenant_id == req.tenant_id,
                 VanStockAllowance.product_id == pline["product_id"]
-            ).first()
+            ).with_for_update().first()
             if not van_allowance or van_allowance.current_quantity < pline["quantity"]:
                 db.rollback()
                 raise HTTPException(status_code=409, detail="Insufficient van stock")
             van_allowance.current_quantity -= pline["quantity"]
+        else:
+            warehouse_product = db.query(Product).filter(Product.id == pline["product_id"],
+                Product.tenant_id == req.tenant_id).with_for_update().first()
+            if warehouse_product is None or warehouse_product.warehouse_stock < pline["quantity"]:
+                db.rollback()
+                raise HTTPException(status_code=409, detail="Insufficient warehouse stock")
+            warehouse_product.warehouse_stock -= pline["quantity"]
 
         # Write immutable stock ledger movement
         movement = StockLedger(
             id=str(uuid.uuid4()),
             tenant_id=req.tenant_id,
-            movement_id=f"MOV-SALE-{invoice.invoice_number}-{pline['product_id']}",
+            movement_id=f"MOV-SALE-{invoice_id}-{index}",
             timestamp=datetime.utcnow(),
             movement_type="VAN_SALE",
             product_id=pline["product_id"],
@@ -154,7 +169,7 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
             unit_cost=Decimal("0.000"),
             total_value=pline["line_total"],
             reference_document=req.invoice_number,
-            created_by=req.created_by
+            created_by=user.id
         )
         db.add(movement)
 
