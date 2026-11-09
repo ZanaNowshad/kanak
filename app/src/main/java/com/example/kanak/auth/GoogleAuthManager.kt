@@ -49,6 +49,8 @@ class GoogleAuthManager(private val context: Context) {
     companion object {
         const val SCOPE_SPREADSHEETS = "https://www.googleapis.com/auth/spreadsheets"
         const val SCOPE_DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
+        private val sharedSheetsToken = MutableStateFlow<String?>(null)
+        fun activeGoogleSheetsAccessToken(): String? = sharedSheetsToken.value
         val REQUIRED_OAUTH_SCOPES = listOf(
             Scope(SCOPE_SPREADSHEETS),
             Scope(SCOPE_DRIVE_FILE)
@@ -71,18 +73,14 @@ class GoogleAuthManager(private val context: Context) {
     private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
-    private val _oauthSheetsToken = MutableStateFlow<String?>(prefs.getString("oauth_sheets_token", null))
+    private val _oauthSheetsToken = sharedSheetsToken
     val oauthSheetsToken: StateFlow<String?> = _oauthSheetsToken.asStateFlow()
 
-    fun getOAuthSheetsToken(): String? {
-        return _oauthSheetsToken.value
-            ?: prefs.getString("oauth_sheets_token", null)
-
-    }
+    fun getOAuthSheetsToken(): String? = _oauthSheetsToken.value
 
     fun setOAuthSheetsToken(token: String) {
         _oauthSheetsToken.value = token
-        prefs.edit().putString("oauth_sheets_token", token).apply()
+        prefs.edit().remove("oauth_sheets_token").apply()
     }
 
     fun hasOAuthSheetsToken(): Boolean {
@@ -137,27 +135,6 @@ class GoogleAuthManager(private val context: Context) {
      * Prevents security flaws where placeholder tokens allowed unauthenticated bypass.
      */
     private fun restoreSession() {
-        val isDemo = prefs.getBoolean("is_demo_session", false)
-        if (isDemo) {
-            val savedUserId = prefs.getString("user_id", null)
-            val savedEmail = prefs.getString("user_email", null)
-            val savedRole = prefs.getString("user_role", User.ROLE_STANDARD) ?: User.ROLE_STANDARD
-            val savedToken = prefs.getString("id_token", null)
-
-            if (savedUserId != null && savedEmail != null && savedToken != null) {
-                _authState.value = AuthState.Authenticated(
-                    user = User(
-                        userId = savedUserId,
-                        email = savedEmail,
-                        role = savedRole,
-                        active = true
-                    ),
-                    idToken = savedToken
-                )
-                return
-            }
-        }
-
         // Production check: Validate that Firebase Auth has an active current user
         val currentUser = FirebaseAuth.getInstance().currentUser
         if (currentUser == null) {
@@ -286,7 +263,7 @@ class GoogleAuthManager(private val context: Context) {
                 )
 
                 // Persist session locally and sync to cloud profile
-                persistSession(user, idToken, isDemo = false)
+                persistSession(user, idToken)
                 try {
                     firebaseManager.syncUserToFirestore(user)
                 } catch (e: Exception) {
@@ -317,27 +294,6 @@ class GoogleAuthManager(private val context: Context) {
         }
     }
 
-    /**
-     * Role-switchable demo account for testing van sales operations in isolated demo mode.
-     * Strictly restricted to Super Admin account if no registered business is linked.
-     */
-    fun signInAsDemo(asAdmin: Boolean = true): AuthState {
-        val email = if (asAdmin) "zanabalmuhamed@gmail.com" else "owner@newbusiness.bh"
-        val user = User(
-            userId = if (asAdmin) "usr_owner_session" else "usr_new_owner_${System.currentTimeMillis() % 10000}",
-            email = email,
-            role = User.ROLE_OWNER,
-            active = true,
-            assignedVanId = null,
-            assignedVanCode = null
-        )
-        val token = "demo_token_${user.userId}"
-        persistSession(user, token, isDemo = true)
-        val state = AuthState.Authenticated(user, token)
-        _authState.value = state
-        return state
-    }
-
     fun signOut() {
         try {
             FirebaseAuth.getInstance().signOut()
@@ -349,9 +305,8 @@ class GoogleAuthManager(private val context: Context) {
         _authState.value = AuthState.Idle
     }
 
-    private fun persistSession(user: User, token: String, isDemo: Boolean) {
+    private fun persistSession(user: User, token: String) {
         prefs.edit()
-            .putBoolean("is_demo_session", isDemo)
             .putString("user_id", user.userId)
             .putString("user_email", user.email)
             .putString("user_role", user.role)
