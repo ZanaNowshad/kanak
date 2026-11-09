@@ -72,11 +72,11 @@ fun BusinessSetupWizardScreen(
     var sheetCreationError by remember { mutableStateOf<String?>(null) }
 
     // Step 4 Data: Initial Fleet & Staff
-    var createInitialVan by rememberSaveable { mutableStateOf(true) }
-    var initialVanCode by rememberSaveable { mutableStateOf("VAN-01") }
-    var initialVanName by rememberSaveable { mutableStateOf("North Route Delivery Van") }
-    var initialPlateNumber by rememberSaveable { mutableStateOf("BH 48921") }
-    var initialStaffName by rememberSaveable { mutableStateOf("Ali Ahmed") }
+    var createInitialVan by rememberSaveable { mutableStateOf(false) }
+    var initialVanCode by rememberSaveable { mutableStateOf("") }
+    var initialVanName by rememberSaveable { mutableStateOf("") }
+    var initialPlateNumber by rememberSaveable { mutableStateOf("") }
+    var initialStaffName by rememberSaveable { mutableStateOf("") }
 
     // Step 5 Data: Finalization
     var isSubmittingSetup by remember { mutableStateOf(false) }
@@ -95,7 +95,7 @@ fun BusinessSetupWizardScreen(
         "Business Details",
         "Cloud Database",
         "Fleet & Route Setup",
-        "Review & Activate"
+        "Review & Finish"
     )
 
     Scaffold(
@@ -242,7 +242,7 @@ fun BusinessSetupWizardScreen(
                                 isCreatingSheet = true
                                 sheetCreationError = null
                                 try {
-                                    val token = repository.currentAuthToken ?: "demo_token"
+                                    val token = repository.currentAuthToken ?: error("Please sign in before connecting Google Sheets")
                                     val name = companyName.ifBlank { "Kanak FMCG" }
                                     val res = bootstrapCloudManager.executeBootstrapCreation(token, name)
                                     res.onSuccess { newId ->
@@ -250,11 +250,11 @@ fun BusinessSetupWizardScreen(
                                         Toast.makeText(context, "Google Sheet template ready!", Toast.LENGTH_SHORT).show()
                                     }.onFailure { err ->
                                         sheetCreationError = "Could not create sheet: ${err.message}. You can continue and connect it later or enter an ID."
-                                        provisionedSheetId = "1KanakMaster_${System.currentTimeMillis() % 100000}"
+                                        provisionedSheetId = null
                                     }
                                 } catch (e: Exception) {
                                     sheetCreationError = "Connection note: ${e.message}"
-                                    provisionedSheetId = "1KanakMaster_Ledger"
+                                    provisionedSheetId = null
                                 } finally {
                                     isCreatingSheet = false
                                 }
@@ -282,7 +282,7 @@ fun BusinessSetupWizardScreen(
                         contactPhone = contactPhone,
                         crNumber = crNumber,
                         vatNumber = vatNumber,
-                        sheetIdentifier = if (sheetMode == "CREATE_NEW") (provisionedSheetId ?: "Master Template (Auto-created)") else customSheetId,
+                        sheetIdentifier = if (sheetMode == "CREATE_NEW") (provisionedSheetId ?: "Not connected") else customSheetId,
                         createInitialVan = createInitialVan,
                         vanCode = initialVanCode,
                         staffName = initialStaffName,
@@ -295,12 +295,18 @@ fun BusinessSetupWizardScreen(
                                 setupErrorMessage = null
 
                                 val targetSheetId = if (sheetMode == "CREATE_NEW") {
-                                    provisionedSheetId ?: "1KanakMaster_${System.currentTimeMillis() % 100000}"
+                                    provisionedSheetId.orEmpty()
                                 } else {
                                     customSheetId.trim()
                                 }
 
+                                if (targetSheetId.isBlank()) {
+                                    isSubmittingSetup = false
+                                    setupErrorMessage = "Connect a real Google Sheet before completing setup."
+                                    return@launch
+                                }
                                 val result = repository.completeBusinessSetup(
+                                    userId = currentUser.userId,
                                     userEmail = currentUser.email,
                                     companyName = companyName.trim(),
                                     businessType = businessType,
@@ -318,7 +324,7 @@ fun BusinessSetupWizardScreen(
 
                                 isSubmittingSetup = false
                                 result.onSuccess {
-                                    Toast.makeText(context, "Business registered successfully! Welcome to Kanak.", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Business setup completed. Welcome to Kanak.", Toast.LENGTH_LONG).show()
                                     onSetupComplete()
                                 }.onFailure { err ->
                                     setupErrorMessage = "Registration error: ${err.message ?: "Please verify your details and try again."}"
