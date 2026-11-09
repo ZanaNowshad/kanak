@@ -170,10 +170,7 @@ private fun MainSettingsView(
 ) {
     val scope = rememberCoroutineScope()
     val selectedPrinter by printerManager.selectedPrinter.collectAsState()
-    val companyProfile = remember(licenseManager) { licenseManager?.loadProfile() }
-    val isMaster = remember(currentUser, licenseManager) {
-        licenseManager?.isMasterAdmin(currentUser.email) == true || currentUser.email.equals(LicenseManager.MASTER_ADMIN_EMAIL, ignoreCase = true)
-    }
+    val isMaster = currentUser.isPlatformAdmin
 
     val context = LocalContext.current
     var gatewayUrl by remember { mutableStateOf(repository.getGatewayUrl() ?: "") }
@@ -732,7 +729,7 @@ private fun MainSettingsView(
                             color = if (!oauthSheetsToken.isNullOrBlank()) KanakSuccessBackground else KanakAccentLight
                         ) {
                             Text(
-                                text = if (!oauthSheetsToken.isNullOrBlank()) "OAuth Active" else "Ready to Authorize",
+                                text = if (!oauthSheetsToken.isNullOrBlank()) "OAuth Token Available" else "Authorize Sheets",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     color = if (!oauthSheetsToken.isNullOrBlank()) KanakSuccess else KanakPrimaryBlue,
                                     fontWeight = FontWeight.Bold,
@@ -866,10 +863,9 @@ private fun MainSettingsView(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Box(
