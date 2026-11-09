@@ -40,7 +40,7 @@ class BootstrapCloudManager(
     val bootstrapStatus: StateFlow<BootstrapStatus> = _bootstrapStatus.asStateFlow()
 
     companion object {
-        val MASTER_SCHEMA_TITLES = listOf("Products", "Customers", "Suppliers", "DailySalesLogs", "Vans", "Staff")
+        val MASTER_SCHEMA_TITLES = listOf("Products", "Customers", "Suppliers", "DailySalesLogs", "Vans", "Staff", "Users")
 
         val PRODUCTS_HEADER: List<Any> = listOf(
             "product_id", "barcode", "name", "category",
@@ -64,6 +64,7 @@ class BootstrapCloudManager(
             "van_id", "business_id", "van_code", "van_name",
             "registration_no", "salesperson_id", "salesperson_name", "status", "notes"
         )
+        val USERS_HEADER: List<Any> = listOf("user_id", "email", "role", "active")
         val STAFF_HEADER: List<Any> = listOf(
             "membership_id", "business_id", "user_id", "email",
             "display_name", "role", "assigned_van_code", "status", "joined_at"
@@ -108,8 +109,13 @@ class BootstrapCloudManager(
      */
     suspend fun executeBootstrapCreation(
         authToken: String,
-        companyName: String
+        companyName: String,
+        ownerEmail: String = "",
+        ownerUserId: String = ""
     ): Result<String> = withContext(Dispatchers.IO) {
+        if (authToken.isBlank() || ownerEmail.isBlank() || ownerUserId.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("Verified owner and Google Sheets OAuth required"))
+        }
         _bootstrapStatus.value = BootstrapStatus.CreatingTemplate
         val authHeader = if (authToken.startsWith("Bearer ")) authToken else "Bearer $authToken"
 
@@ -163,6 +169,21 @@ class BootstrapCloudManager(
                     body = GoogleValueRange(values = listOf(STAFF_HEADER))
                 )
 
+                val usersHeaderResult = syncManager.sheetsApiService.updateValues(
+                    authHeader = authHeader,
+                    spreadsheetId = newSheetId,
+                    range = "Users!A1:D1",
+                    body = GoogleValueRange(values = listOf(USERS_HEADER))
+                )
+                val ownerRowResult = syncManager.sheetsApiService.updateValues(
+                    authHeader = authHeader,
+                    spreadsheetId = newSheetId,
+                    range = "Users!A2:D2",
+                    body = GoogleValueRange(values = listOf(listOf(ownerUserId, ownerEmail, "admin", true)))
+                )
+                if (!usersHeaderResult.isSuccessful || !ownerRowResult.isSuccessful) {
+                    error("Unable to initialize the company admin in Google Sheets")
+                }
                 // Save config to repository & preferences
                 repository.autoProvisionGoogleWorkbook(companyName, newSheetId)
                 prefs.edit().putBoolean("bootstrap_completed", true).putString("sheet_id", newSheetId).apply()
@@ -176,21 +197,14 @@ class BootstrapCloudManager(
 
                 Result.success(newSheetId)
             } else {
-                // Apps script gateway fallback provisioning
-                val gatewaySheetId = "1KanakMasterFMCGLedger_${System.currentTimeMillis()}"
-                repository.autoProvisionGoogleWorkbook(companyName, gatewaySheetId)
-                prefs.edit().putBoolean("bootstrap_completed", true).putString("sheet_id", gatewaySheetId).apply()
-                _bootstrapStatus.value = BootstrapStatus.Completed(gatewaySheetId, "Workbook provisioned via sync gateway.")
-                Result.success(gatewaySheetId)
+                val error = "Google Sheets API could not create the workbook: HTTP ${createResponse.code()}"
+                _bootstrapStatus.value = BootstrapStatus.Error(error)
+                Result.failure(IllegalStateException(error))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Bootstrap creation error: ${e.message}", e)
-            val backupSheetId = "1KanakMasterFMCGLedger_Backup"
-            repository.autoProvisionGoogleWorkbook(companyName, backupSheetId)
-            prefs.edit().putBoolean("bootstrap_completed", true).putString("sheet_id", backupSheetId).apply()
-            val status = BootstrapStatus.Completed(backupSheetId, "Master workbook provisioned.")
-            _bootstrapStatus.value = status
-            Result.success(backupSheetId)
+            Log.e(TAG, "Workbook creation failed", e)
+            _bootstrapStatus.value = BootstrapStatus.Error(e.message ?: "Unable to create workbook")
+            Result.failure(e)
         }
     }
 

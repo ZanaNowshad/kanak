@@ -168,6 +168,7 @@ fun KanakApp(
             } else if (!repository.isBusinessSetupCompleted(effectiveUser.email)) {
                 com.example.kanak.ui.wizard.BusinessSetupWizardScreen(
                     repository = repository,
+                    authManager = authManager,
                     currentUser = effectiveUser,
                     bootstrapCloudManager = bootstrapCloudManager,
                     licenseManager = licenseManager,

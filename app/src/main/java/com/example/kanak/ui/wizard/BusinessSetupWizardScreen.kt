@@ -33,6 +33,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.kanak.data.repository.KanakRepository
+import com.example.kanak.auth.GoogleAuthManager
+import com.example.kanak.auth.OAuthConsentRequired
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import android.app.Activity
 import com.example.kanak.data.sync.BootstrapCloudManager
 import com.example.kanak.data.sync.BootstrapStatus
 import com.example.kanak.domain.models.User
@@ -43,6 +49,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun BusinessSetupWizardScreen(
     repository: KanakRepository,
+    authManager: GoogleAuthManager,
     currentUser: User,
     bootstrapCloudManager: BootstrapCloudManager,
     licenseManager: LicenseManager,
@@ -70,6 +77,15 @@ fun BusinessSetupWizardScreen(
     var provisionedSheetId by rememberSaveable { mutableStateOf<String?>(null) }
     var isCreatingSheet by remember { mutableStateOf(false) }
     var sheetCreationError by remember { mutableStateOf<String?>(null) }
+    val sheetToken by authManager.oauthSheetsToken.collectAsState()
+    val scopeLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            authManager.completeGoogleSheetsOAuth(result.data)
+                .onFailure { sheetCreationError = it.message }
+        } else sheetCreationError = "Google Sheets permission was not granted"
+    }
 
     // Step 4 Data: Initial Fleet & Staff
     var createInitialVan by rememberSaveable { mutableStateOf(false) }
@@ -228,7 +244,24 @@ fun BusinessSetupWizardScreen(
                         onVatNumberChange = { vatNumber = it },
                         onNext = { currentStep = 2 }
                     )
-                    2 -> Step3GoogleSheetConnection(
+                    2 -> Column {
+                        if (sheetToken.isNullOrBlank()) {
+                            Button(onClick = {
+                                coroutineScope.launch {
+                                    authManager.requestGoogleSheetsOAuth(context)
+                                        .onFailure { err ->
+                                            if (err is OAuthConsentRequired)
+                                                scopeLauncher.launch(
+                                                    IntentSenderRequest.Builder(err.pendingIntent.intentSender).build()
+                                                )
+                                            else sheetCreationError = err.message
+                                        }
+                                }
+                            }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                                Text("Authorize Google Sheets")
+                            }
+                        }
+                        Step3GoogleSheetConnection(
                         companyName = companyName.ifBlank { "My FMCG Enterprise" },
                         sheetMode = sheetMode,
                         onSheetModeChange = { sheetMode = it },
@@ -242,9 +275,14 @@ fun BusinessSetupWizardScreen(
                                 isCreatingSheet = true
                                 sheetCreationError = null
                                 try {
-                                    val token = repository.currentAuthToken ?: error("Please sign in before connecting Google Sheets")
+                                    val token = sheetToken
+                                    if (token.isNullOrBlank()) {
+                                        sheetCreationError = "Authorize Google Sheets before creating the workbook."
+                                        return@launch
+                                    }
                                     val name = companyName.ifBlank { "Kanak FMCG" }
-                                    val res = bootstrapCloudManager.executeBootstrapCreation(token, name)
+                                    val res = bootstrapCloudManager.executeBootstrapCreation(
+                                        token, name, currentUser.email, currentUser.userId)
                                     res.onSuccess { newId ->
                                         provisionedSheetId = newId
                                         Toast.makeText(context, "Google Sheet template ready!", Toast.LENGTH_SHORT).show()
@@ -261,7 +299,8 @@ fun BusinessSetupWizardScreen(
                             }
                         },
                         onNext = { currentStep = 3 }
-                    )
+                        )
+                    }
                     3 -> Step4FleetAndStaff(
                         createInitialVan = createInitialVan,
                         onToggleCreate = { createInitialVan = it },
