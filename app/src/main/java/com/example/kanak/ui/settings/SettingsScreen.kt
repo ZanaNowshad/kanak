@@ -35,7 +35,6 @@ import com.example.kanak.data.repository.KanakRepository
 import com.example.kanak.data.sync.SalesSyncBackgroundService
 import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.domain.models.User
-import com.example.kanak.licensing.LicenseManager
 import com.example.kanak.printing.BluetoothPrinterManager
 import com.example.kanak.printing.EscPosReceiptRenderer
 import com.example.kanak.printing.PrintResult
@@ -65,8 +64,6 @@ fun SettingsScreen(
     printerManager: BluetoothPrinterManager,
     currentUser: User,
     onNavigateBack: () -> Unit,
-    licenseManager: LicenseManager? = null,
-    onNavigateToAdminLicensePortal: (() -> Unit)? = null,
     onNavigateToFleet: (() -> Unit)? = null,
     onNavigateToTeam: (() -> Unit)? = null,
     onNavigateToDailySummary: (() -> Unit)? = null,
@@ -85,10 +82,8 @@ fun SettingsScreen(
                 authManager = authManager,
                 printerManager = printerManager,
                 currentUser = currentUser,
-                licenseManager = licenseManager,
                 onNavigateToPrinters = { subView = SettingsSubView.PAIRED_PRINTERS },
                 onNavigateToConfigError = { subView = SettingsSubView.CONFIG_ERROR },
-                onNavigateToAdminLicensePortal = onNavigateToAdminLicensePortal,
                 onNavigateToFleet = onNavigateToFleet,
                 onNavigateToTeam = onNavigateToTeam,
                 onNavigateToDailySummary = onNavigateToDailySummary,
@@ -159,8 +154,6 @@ private fun MainSettingsView(
     onNavigateToConfigError: () -> Unit,
     onRequestSignOut: () -> Unit,
     onNavigateBack: () -> Unit,
-    licenseManager: LicenseManager? = null,
-    onNavigateToAdminLicensePortal: (() -> Unit)? = null,
     onNavigateToFleet: (() -> Unit)? = null,
     onNavigateToTeam: (() -> Unit)? = null,
     onNavigateToDailySummary: (() -> Unit)? = null,

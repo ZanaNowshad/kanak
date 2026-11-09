@@ -41,16 +41,13 @@ import java.util.*
 fun DashboardScreen(
     repository: KanakRepository,
     currentUser: User,
-    isMasterAdmin: Boolean = false,
     onNavigateToNewInvoice: () -> Unit,
-    onNavigateToExpressSales: () -> Unit = onNavigateToNewInvoice,
     onNavigateToSettings: () -> Unit,
     onNavigateToDailySalesSummary: () -> Unit,
     onNavigateToFleet: () -> Unit,
     onNavigateToTeam: () -> Unit,
     onNavigateToProducts: () -> Unit,
     onNavigateToCustomers: () -> Unit,
-    onNavigateToAdminLicensePortal: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val summary by repository.dashboardSummary.collectAsState()
@@ -58,7 +55,7 @@ fun DashboardScreen(
     val vans by repository.vans.collectAsState()
     val invoices by repository.invoices.collectAsState()
 
-    val isOwner = currentUser.isOwner || isMasterAdmin
+    val isOwner = currentUser.isOwner
     val isSalesperson = currentUser.isSalesperson && !isOwner
     val syncState by repository.syncState.collectAsState()
     val isOnline by repository.isOnline.collectAsState()

@@ -15,7 +15,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.kanak.auth.AuthState
 import com.example.kanak.auth.GoogleAuthManager
-import com.example.kanak.licensing.LicenseManager
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -23,7 +22,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun AuthScreen(
     authManager: GoogleAuthManager,
-    licenseManager: LicenseManager,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current

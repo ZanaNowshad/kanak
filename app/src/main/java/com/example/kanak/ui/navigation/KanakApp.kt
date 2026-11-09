@@ -23,7 +23,6 @@ import com.example.kanak.auth.AuthState
 import com.example.kanak.auth.GoogleAuthManager
 import com.example.kanak.data.repository.KanakRepository
 import com.example.kanak.domain.models.User
-import com.example.kanak.licensing.*
 import com.example.kanak.printing.BluetoothPrinterManager
 import com.example.kanak.ui.auth.AuthScreen
 import com.example.kanak.ui.auth.JoinBusinessScreen
@@ -61,7 +60,6 @@ sealed class Screen {
     object Purchases : Screen()
     object Suppliers : Screen()
     object Settings : Screen()
-    object AdminLicensePortal : Screen()
     object DailySalesSummary : Screen()
     object FleetManagement : Screen()
     object TeamManagement : Screen()
@@ -80,7 +78,6 @@ fun KanakApp(
 ) {
     val authState by authManager.authState.collectAsState()
     val context = LocalContext.current
-    val licenseManager = remember { LicenseManager(context) }
     var showingJoinBusiness by remember { mutableStateOf(false) }
     var showStartupSplash by remember { mutableStateOf(true) }
     if (showStartupSplash) {
@@ -110,7 +107,6 @@ fun KanakApp(
                 showingJoinBusiness -> JoinBusinessScreen(
                     repository = repository,
                     currentUser = currentUser,
-                    licenseManager = licenseManager,
                     onJoinedSuccess = { showingJoinBusiness = false },
                     onRegisterNewCompany = { showingJoinBusiness = false },
                     modifier = modifier
@@ -121,7 +117,6 @@ fun KanakApp(
                         authManager = authManager,
                         currentUser = currentUser,
                         bootstrapCloudManager = bootstrap,
-                        licenseManager = licenseManager,
                         onSetupComplete = {},
                         onSignOut = { authManager.signOut() },
                         onNavigateToJoin = { showingJoinBusiness = true },
@@ -131,13 +126,12 @@ fun KanakApp(
                     repository = repository,
                     authManager = authManager,
                     printerManager = printerManager,
-                    licenseManager = licenseManager,
                     currentUser = currentUser,
                     modifier = modifier
                 )
             }
         }
-        else -> AuthScreen(authManager = authManager, licenseManager = licenseManager, modifier = modifier)
+        else -> AuthScreen(authManager = authManager, modifier = modifier)
     }
 }
 
@@ -146,14 +140,9 @@ private fun AuthenticatedApp(
     repository: KanakRepository,
     authManager: GoogleAuthManager,
     printerManager: BluetoothPrinterManager,
-    licenseManager: LicenseManager,
     currentUser: User,
     modifier: Modifier = Modifier
 ) {
-    val isMasterAdmin = remember(currentUser) {
-        licenseManager.isMasterAdmin(currentUser.email)
-    }
-
     val visibleTabs = PrimaryTab.values()
 
     var selectedTab by remember { mutableStateOf(PrimaryTab.HOME) }
@@ -230,16 +219,13 @@ private fun AuthenticatedApp(
                             DashboardScreen(
                                 repository = repository,
                                 currentUser = currentUser,
-                                isMasterAdmin = isMasterAdmin,
                                 onNavigateToNewInvoice = { currentScreen = Screen.InvoiceComposer },
-                                onNavigateToExpressSales = { currentScreen = Screen.InvoiceComposer },
                                 onNavigateToSettings = { currentScreen = Screen.Settings },
                                 onNavigateToDailySalesSummary = { currentScreen = Screen.DailySalesSummary },
                                 onNavigateToFleet = { currentScreen = Screen.FleetManagement },
                                 onNavigateToTeam = { currentScreen = Screen.TeamManagement },
                                 onNavigateToProducts = { selectedTab = PrimaryTab.PRODUCTS },
                                 onNavigateToCustomers = { currentScreen = Screen.Customers },
-                                onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
                                 modifier = Modifier.padding(innerPadding)
                             )
                         }
@@ -270,7 +256,6 @@ private fun AuthenticatedApp(
                         PrimaryTab.MORE -> {
                             MoreHubScreen(
                                 currentUser = currentUser,
-                                isMasterAdmin = isMasterAdmin,
                                 onNavigateToCustomers = { currentScreen = Screen.Customers },
                                 onNavigateToStock = { currentScreen = Screen.Stock },
                                 onNavigateToPurchases = { currentScreen = Screen.Purchases },
@@ -279,7 +264,6 @@ private fun AuthenticatedApp(
                                 onNavigateToReports = { selectedTab = PrimaryTab.REPORTS },
                                 onNavigateToTeam = { currentScreen = Screen.TeamManagement },
                                 onNavigateToSettings = { currentScreen = Screen.Settings },
-                                onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
                                 onSignOut = { authManager.signOut() },
                                 modifier = Modifier.padding(innerPadding)
                             )
@@ -355,8 +339,6 @@ private fun AuthenticatedApp(
                 authManager = authManager,
                 printerManager = printerManager,
                 currentUser = currentUser,
-                licenseManager = licenseManager,
-                onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
                 onNavigateToFleet = { currentScreen = Screen.FleetManagement },
                 onNavigateToTeam = { currentScreen = Screen.TeamManagement },
                 onNavigateToDailySummary = { currentScreen = Screen.DailySalesSummary },
@@ -370,14 +352,6 @@ private fun AuthenticatedApp(
             BackHandler { currentScreen = Screen.Settings }
             com.example.kanak.ui.settings.SystemDiagnosticsScreen(
                 repository = repository,
-                onNavigateBack = { currentScreen = Screen.Settings }
-            )
-        }
-
-        is Screen.AdminLicensePortal -> {
-            BackHandler { currentScreen = Screen.Settings }
-            AdminLicensePortalScreen(
-                licenseManager = licenseManager,
                 onNavigateBack = { currentScreen = Screen.Settings }
             )
         }
@@ -415,7 +389,6 @@ private fun AuthenticatedApp(
             JoinBusinessScreen(
                 repository = repository,
                 currentUser = currentUser,
-                licenseManager = licenseManager,
                 onJoinedSuccess = { currentScreen = Screen.TabView },
                 onRegisterNewCompany = { currentScreen = Screen.TabView }
             )

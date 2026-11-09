@@ -36,7 +36,6 @@ import com.example.ui.theme.*
 @Composable
 fun MoreHubScreen(
     currentUser: User,
-    isMasterAdmin: Boolean,
     onNavigateToCustomers: () -> Unit,
     onNavigateToStock: () -> Unit,
     onNavigateToPurchases: () -> Unit,
@@ -45,7 +44,6 @@ fun MoreHubScreen(
     onNavigateToReports: () -> Unit,
     onNavigateToTeam: () -> Unit,
     onNavigateToSettings: () -> Unit,
-    onNavigateToAdminLicensePortal: () -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier
 ) {

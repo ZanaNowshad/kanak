@@ -42,7 +42,6 @@ import android.app.Activity
 import com.example.kanak.data.sync.BootstrapCloudManager
 import com.example.kanak.data.sync.BootstrapStatus
 import com.example.kanak.domain.models.User
-import com.example.kanak.licensing.LicenseManager
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -52,7 +51,6 @@ fun BusinessSetupWizardScreen(
     authManager: GoogleAuthManager,
     currentUser: User,
     bootstrapCloudManager: BootstrapCloudManager,
-    licenseManager: LicenseManager,
     onSetupComplete: () -> Unit,
     onSignOut: () -> Unit,
     onNavigateToJoin: () -> Unit,
