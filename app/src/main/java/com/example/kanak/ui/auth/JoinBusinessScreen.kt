@@ -167,7 +167,6 @@ fun JoinBusinessScreen(
                                 res.onSuccess {
                                     Toast.makeText(context, "Successfully joined ${it.businessName}!", Toast.LENGTH_LONG).show()
                                     // Mark licensing as activated via company membership
-                                    licenseManager.activateViaCompanyMembership(it.businessName)
                                     onJoinedSuccess()
                                 }.onFailure {
                                     errorMessage = it.message ?: "Invalid or expired invitation code"
