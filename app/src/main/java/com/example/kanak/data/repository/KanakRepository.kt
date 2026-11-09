@@ -2499,8 +2499,13 @@ class KanakRepository(private val context: Context) {
                 ?: error("Verified Firebase session required for company registration")
             val registration = backendApiService.registerCompany(
                 "Bearer $token",
-                RegisterCompanyRequest(companyName.trim(), crNumber.trim(), vatNumber.trim(),
-                    phone.trim(), address.trim())
+                RegisterCompanyRequest(
+                    companyName.trim(), crNumber.trim(), vatNumber.trim(),
+                    phone.trim(), address.trim(),
+                    initialVanCode = vanCode.trim().takeIf { createInitialVan },
+                    initialVanPlate = registrationNo.trim().takeIf { createInitialVan },
+                    initialVanName = vanName.trim().takeIf { createInitialVan }
+                )
             )
             if (!registration.isSuccessful) error("Company registration rejected: HTTP ${registration.code()}")
             val owner = registration.body() ?: error("Company registration returned no membership")
@@ -2563,7 +2568,7 @@ class KanakRepository(private val context: Context) {
 
             // Create initial van and staff if requested
             if (createInitialVan) {
-                val vId = "van_${UUID.randomUUID().toString().take(8)}"
+                val vId = owner.initialVanId ?: error("Initial van was not provisioned on server")
                 val newVan = Van(
                     vanId = vId,
                     businessId = newBizId,

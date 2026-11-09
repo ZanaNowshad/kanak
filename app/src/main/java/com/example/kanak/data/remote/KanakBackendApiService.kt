@@ -13,7 +13,10 @@ data class RegisterCompanyRequest(
     @Json(name = "cr_number") val crNumber: String,
     @Json(name = "trn_number") val trnNumber: String,
     val phone: String,
-    val address: String
+    val address: String,
+    @Json(name = "initial_van_code") val initialVanCode: String? = null,
+    @Json(name = "initial_van_plate") val initialVanPlate: String? = null,
+    @Json(name = "initial_van_name") val initialVanName: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -22,7 +25,8 @@ data class RegisteredCompanyResponse(
     @Json(name = "user_id") val userId: String,
     val email: String,
     val role: String,
-    @Json(name = "company_name") val companyName: String
+    @Json(name = "company_name") val companyName: String,
+    @Json(name = "initial_van_id") val initialVanId: String? = null
 )
 
 interface KanakBackendApiService {

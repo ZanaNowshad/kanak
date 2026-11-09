@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 from backend.app.database import get_db
-from backend.app.models.entities import User, Tenant
+from backend.app.models.entities import User, Tenant, Van
 from backend.app.security import verify_firebase_identity
 from backend.app.schemas.schemas import TenantCreate
 from sqlalchemy.exc import IntegrityError
@@ -15,6 +15,12 @@ class TokenVerifyRequest(BaseModel):
     email: Optional[str] = None
     display_name: Optional[str] = None
 
+class CompanyRegistrationRequest(TenantCreate):
+    initial_van_code: Optional[str] = None
+    initial_van_plate: Optional[str] = None
+    initial_van_name: Optional[str] = None
+
+
 class UserAuthResponse(BaseModel):
     user_id: str
     email: str
@@ -25,6 +31,7 @@ class UserAuthResponse(BaseModel):
     cr_number: Optional[str] = None
     trn_number: Optional[str] = None
     assigned_van_id: Optional[str] = None
+    initial_van_id: Optional[str] = None
 
 @router.post("/verify", response_model=UserAuthResponse)
 def verify_user_and_tenant(req: TokenVerifyRequest, db: Session = Depends(get_db)):
@@ -62,7 +69,7 @@ def verify_user_and_tenant(req: TokenVerifyRequest, db: Session = Depends(get_db
 
 @router.post("/companies", response_model=UserAuthResponse, status_code=201)
 def register_company(
-    req: TenantCreate,
+    req: CompanyRegistrationRequest,
     authorization: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
@@ -79,13 +86,32 @@ def register_company(
     subject = claims.get("uid") or claims.get("sub")
     if not req.company_name.strip():
         raise HTTPException(status_code=422, detail="Company name is required")
-    if db.query(User).filter(
+    existing_owner = db.query(User).filter(
         (User.email == email) | (User.firebase_uid == subject)
-    ).first():
-        raise HTTPException(status_code=409, detail="Account already belongs to a company")
+    ).first()
+    if existing_owner:
+        linked_tenant = db.query(Tenant).filter(Tenant.id == existing_owner.tenant_id).first()
+        if (existing_owner.firebase_uid == subject and existing_owner.email == email
+                and existing_owner.role == "COMPANY_ADMIN" and linked_tenant
+                and linked_tenant.company_name == req.company_name.strip()
+                and (linked_tenant.cr_number or "") == (req.cr_number or "").strip()):
+            same_van = db.query(Van).filter(Van.tenant_id == linked_tenant.id,
+                Van.van_code == (req.initial_van_code or "").strip()).first() if req.initial_van_code else None
+            return UserAuthResponse(
+                user_id=existing_owner.id, email=email, full_name=existing_owner.full_name,
+                role=existing_owner.role, tenant_id=linked_tenant.id,
+                company_name=linked_tenant.company_name,
+                cr_number=linked_tenant.cr_number, trn_number=linked_tenant.trn_number,
+                assigned_van_id=existing_owner.assigned_van_id,
+                initial_van_id=same_van.id if same_van else None
+            )
+        raise HTTPException(status_code=409, detail="Account already belongs to another company")
     cr_number = (req.cr_number or "").strip()
     if cr_number and db.query(Tenant).filter(Tenant.cr_number == cr_number).first():
         raise HTTPException(status_code=409, detail="Commercial registration already registered")
+
+    if req.initial_van_code and not (req.initial_van_plate or "").strip():
+        raise HTTPException(status_code=422, detail="Initial van plate is required")
 
     tenant = Tenant(
         company_name=req.company_name.strip(),
@@ -107,6 +133,15 @@ def register_company(
             is_active=True,
         )
         db.add(owner)
+        initial_van = None
+        if req.initial_van_code:
+            initial_van = Van(
+                tenant_id=tenant.id, van_code=req.initial_van_code.strip(),
+                plate_number=req.initial_van_plate.strip(),
+                model=(req.initial_van_name or "").strip() or None,
+                is_active=True,
+            )
+            db.add(initial_van)
         db.commit()
         db.refresh(owner)
     except IntegrityError as error:
@@ -123,4 +158,5 @@ def register_company(
         cr_number=tenant.cr_number,
         trn_number=tenant.trn_number,
         assigned_van_id=None,
+        initial_van_id=initial_van.id if initial_van else None,
     )
