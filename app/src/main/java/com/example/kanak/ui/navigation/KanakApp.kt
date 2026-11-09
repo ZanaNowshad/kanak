@@ -114,20 +114,10 @@ fun KanakApp(
             val bootstrapCloudManager = remember { com.example.kanak.data.sync.BootstrapCloudManager(context, repository, syncManager) }
             val bootstrapStatus by bootstrapCloudManager.bootstrapStatus.collectAsState()
             val coroutineScope = rememberCoroutineScope()
-            var isVerifyingRegistration by remember(state.user.email) {
-                mutableStateOf(!isMasterAdmin && licenseState != LicenseState.ACTIVATED)
-            }
+            var isVerifyingRegistration by remember(state.user.email) { mutableStateOf(false) }
 
             LaunchedEffect(state.idToken, effectiveUser.email) {
                 repository.currentAuthToken = state.idToken
-                if (!isMasterAdmin && licenseState != LicenseState.ACTIVATED) {
-                    try {
-                        licenseManager.syncUserRegistration(effectiveUser.email, effectiveUser.businessName)
-                    } catch (_: Exception) {}
-                    isVerifyingRegistration = false
-                } else {
-                    isVerifyingRegistration = false
-                }
                 try {
                     com.example.kanak.data.firebase.KanakFirebaseManager(context).syncUserToFirestore(effectiveUser)
                 } catch (_: Exception) {
@@ -175,7 +165,7 @@ fun KanakApp(
                     },
                     modifier = modifier
                 )
-            } else if (!isMasterAdmin && !repository.isBusinessSetupCompleted(effectiveUser.email)) {
+            } else if (!repository.isBusinessSetupCompleted(effectiveUser.email)) {
                 com.example.kanak.ui.wizard.BusinessSetupWizardScreen(
                     repository = repository,
                     currentUser = effectiveUser,
