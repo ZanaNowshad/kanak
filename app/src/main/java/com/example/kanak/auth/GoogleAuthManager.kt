@@ -73,7 +73,7 @@ class GoogleAuthManager(private val context: Context) {
     fun getOAuthSheetsToken(): String? {
         return _oauthSheetsToken.value
             ?: prefs.getString("oauth_sheets_token", null)
-            ?: prefs.getString("id_token", null)
+
     }
 
     fun setOAuthSheetsToken(token: String) {
@@ -106,16 +106,13 @@ class GoogleAuthManager(private val context: Context) {
                 Result.success(accessToken)
             } else if (result.hasResolution()) {
                 Log.i("GoogleAuthManager", "OAuth 2.0 requires user resolution, returning available session token")
-                val fallback = getOAuthSheetsToken() ?: "pending_oauth_consent"
-                Result.success(fallback)
+                Result.failure(IllegalStateException("Google Sheets consent must be completed before API access"))
             } else {
-                val fallback = getOAuthSheetsToken() ?: "granted_device_oauth_token"
-                Result.success(fallback)
+                Result.failure(IllegalStateException("Google Sheets access token not granted"))
             }
         } catch (e: Exception) {
             Log.w("GoogleAuthManager", "OAuth 2.0 request exception: ${e.message}")
-            val fallback = getOAuthSheetsToken() ?: "granted_device_oauth_token"
-            Result.success(fallback)
+            Result.failure(e)
         }
     }
 
@@ -295,13 +292,6 @@ class GoogleAuthManager(private val context: Context) {
                     firebaseManager.syncUserToFirestore(user)
                 } catch (e: Exception) {
                     Log.w("GoogleAuthManager", "Async cloud profile update: ${e.message}")
-                }
-
-                // Request OAuth 2.0 scopes for Google Sheets & Drive
-                try {
-                    requestGoogleSheetsOAuth(targetContext)
-                } catch (e: Exception) {
-                    Log.w("GoogleAuthManager", "Pre-authorization of Google Sheets OAuth: ${e.message}")
                 }
 
                 val state = AuthState.Authenticated(user, idToken)
