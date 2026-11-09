@@ -41,6 +41,31 @@ jobs:
           retention-days: 7
       - name: Run Android unit tests
         run: gradle :app:testDebugUnitTest --no-daemon --stacktrace
+      - name: Print failed Android unit-test tracebacks
+        if: failure()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          for file in Path('app/build/test-results').rglob('*.xml'):
+              try:
+                  root = ET.parse(file).getroot()
+              except (ET.ParseError, OSError):
+                  continue
+              for case in root.iter('testcase'):
+                  for failure in case.findall('failure'):
+                      print('\n===', file, case.get('name'), '===')
+                      print((failure.text or failure.attrib.get('message', ''))[:7000])
+          PY
+      - name: Upload Android test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kanak-android-test-reports
+          path: app/build/test-results/testDebugUnitTest/**
+          if-no-files-found: ignore
+          retention-days: 7
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
