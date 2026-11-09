@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,6 +39,7 @@ import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 import com.example.kanak.domain.models.User
 import java.math.BigDecimal
+import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,6 +69,7 @@ fun InvoiceComposerScreen(
 
     var productSearchQuery by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
+    val draftInvoiceId by rememberSaveable { mutableStateOf(UUID.randomUUID().toString()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var selectedPaymentType by remember { mutableStateOf(Invoice.PAYMENT_CASH) }
     var showBarcodeScanDialog by remember { mutableStateOf(false) }
@@ -351,7 +354,7 @@ fun InvoiceComposerScreen(
                                     if (qty > BigDecimal.ZERO) KanakRepository.ProposedLine(prodId, qty) else null
                                 }
 
-                                val effectiveUserId = currentUser?.displayName?.ifBlank { currentUserId } ?: currentUserId
+                                val effectiveUserId = currentUser?.userId?.ifBlank { currentUserId } ?: currentUserId
                                 val effectiveVanId = currentUser?.assignedVanId?.ifBlank { "" } ?: ""
                                 val effectiveVanCode = currentUser?.assignedVanCode?.ifBlank { "" } ?: ""
 
@@ -359,6 +362,7 @@ fun InvoiceComposerScreen(
                                     customerId = cust.customerId,
                                     proposedLines = proposed,
                                     createdBy = effectiveUserId,
+                                    preAssignedInvoiceId = draftInvoiceId,
                                     paymentType = selectedPaymentType,
                                     vanId = effectiveVanId,
                                     vanCode = effectiveVanCode
@@ -373,7 +377,7 @@ fun InvoiceComposerScreen(
                                                 invoice = committedInvoice,
                                                 businessName = repository.getBusinessName(),
                                                 vatNumber = repository.getVatNumber(),
-                                                crNumber = "123456-1"
+                                                crNumber = repository.currentBusiness.value.crNumber
                                             )
                                         } catch (_: Exception) {}
                                     }

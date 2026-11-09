@@ -99,9 +99,8 @@ fun KanakApp(
             }
             LaunchedEffect(state.idToken, currentUser) {
                 repository.currentAuthToken = state.idToken
-                try {
-                    com.example.kanak.data.firebase.KanakFirebaseManager(context).syncUserToFirestore(currentUser)
-                } catch (_: Exception) {}
+                // Firestore client-side role/user writes are intentionally disabled.
+                // Memberships must be created and verified by the authoritative API.
             }
             when {
                 showingJoinBusiness -> JoinBusinessScreen(

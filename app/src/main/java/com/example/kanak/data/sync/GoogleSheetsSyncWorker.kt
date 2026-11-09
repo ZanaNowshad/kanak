@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import androidx.work.*
 import com.example.kanak.data.repository.KanakRepository
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
@@ -22,23 +24,14 @@ class GoogleSheetsSyncWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         Log.i(TAG, "Starting WorkManager background offline queue sync...")
         val repository = KanakRepository.getInstance(applicationContext)
-        val syncManager = GoogleSheetsSyncManager(applicationContext, repository)
-
         try {
-            var salesPushed = 0
-            val sheetId = repository.getGoogleSheetId()
-            val token = repository.currentAuthToken ?: "bearer_token"
-
-            if (!sheetId.isNullOrBlank()) {
-                val directPushResult = syncManager.pushDailySalesLogsToSheets(token, sheetId)
-                salesPushed += directPushResult.getOrDefault(0)
-            }
-
-            // 1. Flush offline Room queue mutations to remote sync gateway & backup pending sales
-            val syncAllResult = repository.syncAllPendingNow()
-            val syncedCount = syncAllResult.getOrDefault(0)
-
-            Log.i(TAG, "Background sync worker completed successfully. Sales Pushed to Sheets: $salesPushed, Total Synced: $syncedCount")
+            // Recover a fresh backend bearer token even after process death.
+            val firebaseUser = FirebaseAuth.getInstance().currentUser
+                ?: error("Not authenticated: queued transactions remain on device")
+            repository.currentAuthToken = firebaseUser.getIdToken(false).await().token
+                ?.takeIf { it.isNotBlank() } ?: error("Firebase session expired")
+            val syncedCount = repository.syncAllPendingNow().getOrThrow()
+            Log.i(TAG, "Background sync confirmed $syncedCount queued operations")
             Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "WorkManager sync execution failed: ${e.message}", e)

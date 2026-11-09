@@ -171,6 +171,16 @@ class InvoiceLineResponse(BaseModel):
 class InvoiceCreate(BaseModel):
     tenant_id: str
     invoice_number: str
+    # Stable UUID supplied by an offline device. Replaying it must be idempotent.
+    client_operation_id: Optional[str] = None
+
+    @field_validator("client_operation_id")
+    @classmethod
+    def require_uuid_operation_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        from uuid import UUID
+        return str(UUID(value))
     van_id: Optional[str] = None
     customer_id: str
     customer_name: str
@@ -226,5 +236,7 @@ class OutboxBatchSyncResponse(BaseModel):
     success: bool
     processed_count: int
     rejected_count: int
-    errors: List[str] = []
+    errors: List[str] = Field(default_factory=list)
+    acknowledged_ids: List[str] = Field(default_factory=list)
+    rejected_ids: List[str] = Field(default_factory=list)
     server_timestamp: datetime

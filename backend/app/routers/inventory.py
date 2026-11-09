@@ -7,7 +7,8 @@ from pydantic import BaseModel
 import uuid
 
 from backend.app.database import get_db
-from backend.app.models.entities import Product, StockLedger
+from backend.app.models.entities import Product, StockLedger, User
+from backend.app.security import get_authenticated_user
 
 router = APIRouter(prefix="/inventory", tags=["Inventory & Ledger"])
 
@@ -48,8 +49,13 @@ def get_stock_ledger(
     return q.order_by(StockLedger.timestamp.desc()).limit(limit).all()
 
 @router.post("/adjust")
-def adjust_warehouse_stock(req: StockAdjustmentRequest, db: Session = Depends(get_db)):
-    prod = db.query(Product).filter(Product.id == req.product_id, Product.tenant_id == req.tenant_id).first()
+def adjust_warehouse_stock(req: StockAdjustmentRequest, db: Session = Depends(get_db),
+                           user: User = Depends(get_authenticated_user)):
+    if not req.new_quantity.is_finite() or req.new_quantity < 0 or req.new_quantity.as_tuple().exponent < -3:
+        raise HTTPException(status_code=422, detail="Warehouse stock cannot be negative or exceed three decimal places")
+    if not req.reason.strip():
+        raise HTTPException(status_code=422, detail="Adjustment reason is required")
+    prod = db.query(Product).filter(Product.id == req.product_id, Product.tenant_id == req.tenant_id).with_for_update().first()
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
 
@@ -60,7 +66,7 @@ def adjust_warehouse_stock(req: StockAdjustmentRequest, db: Session = Depends(ge
     movement = StockLedger(
         id=str(uuid.uuid4()),
         tenant_id=req.tenant_id,
-        movement_id=f"MOV-ADJ-{prod.barcode}-{int(datetime.utcnow().timestamp())}",
+        movement_id=f"MOV-ADJ-{uuid.uuid4()}",
         timestamp=datetime.utcnow(),
         movement_type="AUDIT_ADJUSTMENT",
         product_id=prod.id,
@@ -70,7 +76,7 @@ def adjust_warehouse_stock(req: StockAdjustmentRequest, db: Session = Depends(ge
         unit_cost=prod.unit_cost,
         total_value=abs(difference) * prod.unit_price,
         reference_document=f"REASON: {req.reason}",
-        created_by=req.performed_by
+        created_by=user.id
     )
     db.add(movement)
     db.commit()

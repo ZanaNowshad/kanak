@@ -1,8 +1,13 @@
 package com.example.kanak.data.repository
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.example.kanak.data.remote.GatewayRequest
 import com.example.kanak.data.remote.KanakApiService
+import com.example.kanak.data.remote.KanakBackendApiService
+import com.example.kanak.data.remote.RegisterCompanyRequest
+import com.example.kanak.data.remote.OutboxUploadItem
+import com.example.kanak.data.remote.OutboxUploadRequest
 import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.domain.models.*
 import com.example.kanak.images.BingThumbnailUrlBuilder
@@ -44,7 +49,7 @@ class KanakRepository(private val context: Context) {
     // Retrofit client for the Apps Script Web App Gateway
     private val apiService: KanakApiService by lazy {
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (com.example.BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
         }
         val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -58,6 +63,22 @@ class KanakRepository(private val context: Context) {
             .addConverterFactory(MoshiConverterFactory.create())
             .build()
             .create(KanakApiService::class.java)
+    }
+
+    private val backendApiService: KanakBackendApiService by lazy {
+        val endpoint = com.example.BuildConfig.KANAK_API_BASE_URL.trim()
+        require(endpoint.startsWith("https://")) {
+            "KANAK_API_BASE_URL must identify the permanent HTTPS backend"
+        }
+        Retrofit.Builder()
+            .baseUrl(endpoint.trimEnd('/') + "/")
+            .client(OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .build())
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+            .create(KanakBackendApiService::class.java)
     }
 
     // Reactive StateFlows for All 8 Entities
@@ -137,10 +158,7 @@ class KanakRepository(private val context: Context) {
 
     init {
         loadLocalDatabase()
-        // Strictly purge any legacy mock FMCG data to ensure 100% clean production state
-        if (_products.value.any { it.productId.startsWith("prod_00") || it.name.contains("Almarai", ignoreCase = true) }) {
-            clearAllData()
-        }
+        // Never delete persisted data based on product names or ID patterns.
         recalculateDashboard()
         setupNetworkMonitoring()
         refreshPendingSyncCount()
@@ -900,13 +918,17 @@ class KanakRepository(private val context: Context) {
 
         // Check van stock if van is specified
         if (vanId.isNotBlank()) {
+            // An unallocated van has zero stock, not unlimited stock.
             val vanStockMap = _vanStocks.value[vanId] ?: emptyMap()
-            for (item in proposedLines) {
-                val availableInVan = vanStockMap[item.productId] ?: BigDecimal.ZERO
-                // If van has inventory tracking and stock is less than requested
-                if (vanStockMap.isNotEmpty() && availableInVan < item.qty) {
-                    val prod = _products.value.find { it.productId == item.productId }
-                    return Result.failure(IllegalStateException("Insufficient van stock for '${prod?.name ?: item.productId}' in $vanCode. Available: $availableInVan, requested: ${item.qty}"))
+            val requiredByProduct = proposedLines.groupBy { it.productId }
+                .mapValues { (_, lines) -> lines.fold(BigDecimal.ZERO) { sum, line -> sum + line.qty } }
+            for ((productId, requiredQty) in requiredByProduct) {
+                val availableInVan = vanStockMap[productId] ?: BigDecimal.ZERO
+                if (requiredQty > availableInVan) {
+                    val productName = _products.value.find { it.productId == productId }?.name ?: productId
+                    return Result.failure(IllegalStateException(
+                        "Insufficient van stock for '$productName' in $vanCode. Available: $availableInVan, requested: $requiredQty"
+                    ))
                 }
             }
         }
@@ -985,7 +1007,8 @@ class KanakRepository(private val context: Context) {
             idempotencyKey = invoiceId
         )
 
-        // Deduct van stock if van is specified
+        // Stage van balance; no business state may change before SQLite commit.
+        var committedVanStocks = _vanStocks.value
         if (vanId.isNotBlank()) {
             val currentVanStocks = _vanStocks.value.toMutableMap()
             val vanStockMap = (currentVanStocks[vanId] ?: emptyMap()).toMutableMap()
@@ -994,17 +1017,13 @@ class KanakRepository(private val context: Context) {
                 vanStockMap[item.productId] = currentQty.subtract(item.qty).max(BigDecimal.ZERO)
             }
             currentVanStocks[vanId] = vanStockMap
-            _vanStocks.value = currentVanStocks
+            committedVanStocks = currentVanStocks
         }
 
-        // Commit atomically to state
-        _products.value = updatedProducts
-        _invoices.value = listOf(invoice) + _invoices.value
-        recalculateDashboard()
-
-        // Insert into Room database with PENDING status for offline resilience
+        // Invoice + lines + stock + durable outbox are one Room transaction.
         try {
             withContext(Dispatchers.IO) {
+                roomDb.withTransaction {
                 roomDb.invoiceDao().insertFullInvoice(
                     com.example.kanak.data.local.InvoiceEntity.fromDomain(invoice, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_PENDING),
                     invoice.lines.map { com.example.kanak.data.local.InvoiceLineEntity.fromDomain(it) }
@@ -1015,6 +1034,7 @@ class KanakRepository(private val context: Context) {
                 // Queue for background sync
                 val payloadMap = mapOf(
                     "invoice_id" to invoice.invoiceId,
+                    "van_id" to invoice.vanId,
                     "invoice_number" to invoice.invoiceNumber,
                     "customer_id" to invoice.customerId,
                     "customer_name" to invoice.customerName,
@@ -1047,49 +1067,26 @@ class KanakRepository(private val context: Context) {
                         payloadJson = jsonPayload
                     )
                 )
+                }
             }
         } catch (e: Exception) {
-            android.util.Log.w("KanakRepository", "Offline invoice cache error: ${e.message}")
+            android.util.Log.e("KanakRepository", "Invoice transaction failed", e)
+            return Result.failure(IllegalStateException("Invoice not saved; no sale was posted", e))
         }
+        _vanStocks.value = committedVanStocks
+        _products.value = updatedProducts
+        _invoices.value = listOf(invoice) + _invoices.value
+        recalculateDashboard()
         refreshPendingSyncCount()
 
-        // Sync with Google Sheets backend
-        syncToGatewayIfConfigured("create_invoice", mapOf(
-            "invoice_id" to invoice.invoiceId,
-            "invoice_number" to invoice.invoiceNumber,
-            "customer_id" to invoice.customerId,
-            "customer_name" to invoice.customerName,
-            "date" to invoice.date,
-            "subtotal" to invoice.subtotal.toPlainString(),
-            "vat_total" to invoice.vatTotal.toPlainString(),
-            "total" to invoice.total.toPlainString(),
-            "status" to invoice.status,
-            "created_by" to invoice.createdBy,
-            "payment_type" to invoice.paymentType,
-            "payment_status" to invoice.paymentStatus,
-            "amount_paid" to invoice.amountPaid.toPlainString(),
-            "lines" to invoice.lines.map { l ->
-                mapOf(
-                    "line_id" to l.lineId,
-                    "product_id" to l.productId,
-                    "product_name" to l.productName,
-                    "qty" to l.qty.toPlainString(),
-                    "unit_price" to l.unitPrice.toPlainString(),
-                    "vat_rate" to l.vatRate.toPlainString(),
-                    "vat_amount" to l.vatAmount.toPlainString(),
-                    "line_total" to l.lineTotal.toPlainString()
-                )
-            }
-        ))
-
-        // Cloud backup to Firebase Firestore
-        scope.launch {
-            try {
-                firebaseManager.backupInvoiceToFirestore(invoice, createdBy)
-            } catch (_: Exception) {
-            }
+        // One durable outbox owns financial delivery. No duplicate fire-and-forget writes.
+        try {
+            com.example.kanak.data.sync.GoogleSheetsSyncWorker.enqueueImmediateSync(context)
+        } catch (e: IllegalStateException) {
+            // WorkManager scheduling can fail on a freshly initialized/test process.
+            // The SQLite outbox has already committed; it remains pending for retry.
+            android.util.Log.w("KanakRepository", "Background scheduling unavailable; sale safely queued", e)
         }
-
         return Result.success(invoice)
     }
 
@@ -1120,7 +1117,8 @@ class KanakRepository(private val context: Context) {
         }
 
         val scaledPayment = BahrainFinancials.scaleAmount(amountToPay)
-        val newAmountPaid = invoice.amountPaid.add(scaledPayment).min(invoice.total)
+        if (scaledPayment > remainingBalance) return Result.failure(IllegalArgumentException("Payment exceeds invoice balance"))
+        val newAmountPaid = invoice.amountPaid.add(scaledPayment)
         val newStatus = if (newAmountPaid >= invoice.total) {
             Invoice.PAYMENT_STATUS_PAID
         } else {
@@ -1358,12 +1356,8 @@ class KanakRepository(private val context: Context) {
                 db.customerDao().insertAll(_customers.value.map { com.example.kanak.data.local.CustomerEntity.fromDomain(it) })
                 db.supplierDao().insertAll(_suppliers.value.map { com.example.kanak.data.local.SupplierEntity.fromDomain(it) })
                 db.purchaseDao().insertAll(_purchases.value.map { com.example.kanak.data.local.PurchaseEntity.fromDomain(it) })
-                _invoices.value.forEach { inv ->
-                    db.invoiceDao().insertFullInvoice(
-                        com.example.kanak.data.local.InvoiceEntity.fromDomain(inv),
-                        inv.lines.map { com.example.kanak.data.local.InvoiceLineEntity.fromDomain(it) }
-                    )
-                }
+                // Invoices are inserted only by the transactional checkout flow.
+                // Blind REPLACE here used to reset SYNCED invoices to PENDING.
                 db.stockAdjustmentDao().insertAll(_stockAdjustments.value.map { com.example.kanak.data.local.StockAdjustmentEntity.fromDomain(it) })
             } catch (e: Exception) {
                 android.util.Log.w("KanakRepository", "Room save error: ${e.message}")
@@ -1791,67 +1785,10 @@ class KanakRepository(private val context: Context) {
      * and pushes them to the authoritative Google Sheets document via the Google Apps Script Gateway.
      * Marks synced documents in Firestore upon confirmation.
      */
-    suspend fun pushFirestoreSalesToGoogleSheets(): Result<Int> = mutationMutex.withLock {
-        val gatewayUrl = getGatewayUrl()
-        if (gatewayUrl.isNullOrBlank()) {
-            return Result.failure(IllegalStateException("Google Sheets Gateway URL is not configured."))
-        }
-
-        try {
-            val pendingSalesResult = firebaseManager.getCompletedSalesForSheetsSync()
-            val salesToPush = pendingSalesResult.getOrThrow()
-            if (salesToPush.isEmpty()) {
-                return Result.success(0)
-            }
-
-            var pushedCount = 0
-            val token = requireNotNull(currentAuthToken?.takeIf { it.isNotBlank() }) { "Sign in before using Google Sheets Gateway" }
-
-            for (invoice in salesToPush) {
-                val payload = mapOf(
-                    "invoice_id" to invoice.invoiceId,
-                    "invoice_number" to invoice.invoiceNumber,
-                    "customer_id" to invoice.customerId,
-                    "customer_name" to invoice.customerName,
-                    "date" to invoice.date,
-                    "subtotal" to invoice.subtotal.toPlainString(),
-                    "vat_total" to invoice.vatTotal.toPlainString(),
-                    "total" to invoice.total.toPlainString(),
-                    "status" to invoice.status,
-                    "created_by" to invoice.createdBy,
-                    "payment_type" to invoice.paymentType,
-                    "payment_status" to invoice.paymentStatus,
-                    "amount_paid" to invoice.amountPaid.toPlainString(),
-                    "lines" to invoice.lines.map { l ->
-                        mapOf(
-                            "line_id" to l.lineId,
-                            "product_id" to l.productId,
-                            "product_name" to l.productName,
-                            "qty" to l.qty.toPlainString(),
-                            "unit_price" to l.unitPrice.toPlainString(),
-                            "vat_rate" to l.vatRate.toPlainString(),
-                            "vat_amount" to l.vatAmount.toPlainString(),
-                            "line_total" to l.lineTotal.toPlainString()
-                        )
-                    }
-                )
-
-                val req = GatewayRequest(action = "create_invoice", idToken = token, payload = payload)
-                val resp = apiService.executeGatewayAction(gatewayUrl, req)
-                if (resp.isSuccessful && resp.body()?.success == true) {
-                    firebaseManager.markSaleSyncedToSheets(invoice.invoiceId)
-                    try {
-                        roomDb.invoiceDao().updateSyncStatus(invoice.invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED)
-                    } catch (_: Exception) {}
-                    pushedCount++
-                }
-            }
-
-            return Result.success(pushedCount)
-        } catch (e: Exception) {
-            return Result.failure(e)
-        }
-    }
+    suspend fun pushFirestoreSalesToGoogleSheets(): Result<Int> =
+        Result.failure(UnsupportedOperationException(
+            "Unsafe Firestore-to-Sheets invoice replay disabled; use durable outbox."
+        ))
 
     /**
      * Retrieves all pending sales transactions stored in the local SQLite Room database.
@@ -1892,30 +1829,59 @@ class KanakRepository(private val context: Context) {
      * Flushes offline mutations recorded in the Room sync queue to the Google Sheets gateway.
      */
     suspend fun flushPendingRoomSyncQueue(): Result<Int> {
-        val gatewayUrl = getGatewayUrl() ?: return Result.success(0)
-        if (gatewayUrl.isBlank()) return Result.success(0)
-
         return try {
             val pending = roomDb.syncQueueDao().getPendingItems()
-            var count = 0
-            val token = requireNotNull(currentAuthToken?.takeIf { it.isNotBlank() }) { "Sign in before using Google Sheets Gateway" }
+            if (pending.isEmpty()) return Result.success(0)
+            val token = currentAuthToken?.takeIf { it.isNotBlank() }
+                ?: return Result.failure(IllegalStateException("Firebase session is required for syncing"))
+            val tenantId = getBusinessId().takeIf { it.isNotBlank() }
+                ?: return Result.failure(IllegalStateException("Authoritative company registration required"))
+            val deviceId = prefs.getString("device_installation_id", null)
+                ?: UUID.randomUUID().toString().also {
+                    prefs.edit().putString("device_installation_id", it).apply()
+                }
+            var sent = 0
+            val failures = mutableListOf<String>()
             for (item in pending) {
                 try {
+                    if (item.action != "create_invoice")
+                        error("Unsupported offline mutation; server validation required")
                     @Suppress("UNCHECKED_CAST")
-                    val payload = moshi.adapter(Map::class.java).fromJson(item.payloadJson) as? Map<String, Any?> ?: emptyMap()
-                    val req = GatewayRequest(action = item.action, idToken = token, payload = payload)
-                    val resp = apiService.executeGatewayAction(gatewayUrl, req)
-                    if (resp.isSuccessful && resp.body()?.success == true) {
+                    val payload = moshi.adapter(Map::class.java).fromJson(item.payloadJson) as? Map<String, Any?>
+                        ?: error("Unreadable queued invoice")
+                    val invoiceId = payload["invoice_id"]?.toString()
+                        ?.takeIf { it.isNotBlank() } ?: error("Missing invoice operation ID")
+                    val assignedVan = payload["van_id"]?.toString()?.takeIf { it.isNotBlank() }
+                    val request = OutboxUploadRequest(
+                        tenantId = tenantId,
+                        deviceId = deviceId,
+                        vanId = assignedVan,
+                        items = listOf(OutboxUploadItem(
+                            operation = "INSERT_INVOICE",
+                            entityId = invoiceId,
+                            payload = payload,
+                            timestamp = getBahrainTimestampString()
+                        ))
+                    )
+                    val response = backendApiService.flushOutbox("Bearer $token", request)
+                    val result = response.body()
+                    if (!response.isSuccessful || result?.acknowledgedIds?.contains(invoiceId) != true)
+                        error(result?.errors?.joinToString("; ") ?: "Backend HTTP ${response.code()}")
+                    roomDb.withTransaction {
+                        roomDb.invoiceDao().updateSyncStatus(
+                            invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED
+                        )
                         roomDb.syncQueueDao().deleteById(item.queueId)
-                        count++
-                    } else {
-                        roomDb.syncQueueDao().markFailed(item.queueId, resp.body()?.error ?: "HTTP ${resp.code()}")
                     }
+                    sent++
                 } catch (e: Exception) {
+                    // Keep it pending until the server explicitly acknowledges this UUID.
                     roomDb.syncQueueDao().markFailed(item.queueId, e.message)
+                    failures.add("Queue ${item.queueId}: ${e.message}")
                 }
             }
-            Result.success(count)
+            if (failures.isNotEmpty()) Result.failure(IllegalStateException(failures.joinToString("; ")))
+            else Result.success(sent)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -1928,49 +1894,23 @@ class KanakRepository(private val context: Context) {
     suspend fun syncAllPendingNow(): Result<Int> = mutationMutex.withLock {
         if (!_isOnline.value) {
             updateSyncState()
-            return Result.failure(IllegalStateException("Device is offline. Changes are stored locally in Room database."))
+            return Result.failure(IllegalStateException("Offline: transactions remain queued"))
         }
-
         _isSyncing.value = true
         updateSyncState()
         try {
-            var syncedCount = 0
-
-            // 1. Back up pending local Room invoices to Firestore
-            val pendingEntities = roomDb.invoiceDao().getInvoicesBySyncStatus(com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_PENDING)
-            for (pEntity in pendingEntities) {
-                val fullInv = roomDb.invoiceDao().getInvoiceWithLinesById(pEntity.invoiceId)?.toDomain()
-                if (fullInv != null) {
-                    val fbResult = firebaseManager.backupInvoiceToFirestore(fullInv, fullInv.createdBy)
-                    if (fbResult.isSuccess) {
-                        roomDb.invoiceDao().updateSyncStatus(fullInv.invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED)
-                        syncedCount++
-                    } else {
-                        android.util.Log.w("KanakRepository", "Firestore backup retry: ${fbResult.exceptionOrNull()?.message}")
-                    }
-                }
-            }
-
-            // 2. Push Firestore sales to authoritative Google Sheets
-            val sheetsResult = pushFirestoreSalesToGoogleSheets()
-            syncedCount += sheetsResult.getOrNull() ?: 0
-
-            // 3. Flush any pending Room sync queue mutations
-            val queueResult = flushPendingRoomSyncQueue()
-            syncedCount += queueResult.getOrNull() ?: 0
-
-            refreshPendingSyncCount()
-            _conflictCount.value = 0
-            _conflictMessage.value = null
+            // No nested mutex and no unvalidated Firestore replica writes.
+            val sent = flushPendingRoomSyncQueue().getOrThrow()
             _lastSyncError.value = null
-            updateSyncState()
-            Result.success(syncedCount)
+            refreshPendingSyncCount()
+            Result.success(sent)
         } catch (e: Exception) {
             _lastSyncError.value = e.message
             updateSyncState()
             Result.failure(e)
         } finally {
             _isSyncing.value = false
+            refreshPendingSyncCount()
             updateSyncState()
         }
     }
@@ -2022,7 +1962,7 @@ class KanakRepository(private val context: Context) {
                     return Business(
                         businessId = m["business_id"]?.toString() ?: "biz_001",
                         name = m["name"]?.toString() ?: getBusinessName(),
-                        crNumber = m["cr_number"]?.toString() ?: "123456-1",
+                        crNumber = m["cr_number"]?.toString() ?: "",
                         vatNumber = m["vat_number"]?.toString() ?: getVatNumber(),
                         ownerEmail = m["owner_email"]?.toString() ?: "zanabalmuhamed@gmail.com",
                         ownerName = m["owner_name"]?.toString() ?: "Zanabal Mohamed",
@@ -2037,7 +1977,7 @@ class KanakRepository(private val context: Context) {
         return Business(
             businessId = "biz_001",
             name = getBusinessName(),
-            crNumber = "123456-1",
+            crNumber = "",
             vatNumber = getVatNumber(),
             ownerEmail = "zanabalmuhamed@gmail.com",
             ownerName = "Zanabal Mohamed",
@@ -2554,11 +2494,29 @@ class KanakRepository(private val context: Context) {
         initialStaffName: String
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            // A local profile/Google Sheet never grants company ownership.
+            val token = currentAuthToken?.takeIf { it.isNotBlank() }
+                ?: error("Verified Firebase session required for company registration")
+            val registration = backendApiService.registerCompany(
+                "Bearer $token",
+                RegisterCompanyRequest(
+                    companyName.trim(), crNumber.trim(), vatNumber.trim(),
+                    phone.trim(), address.trim(),
+                    initialVanCode = vanCode.trim().takeIf { createInitialVan },
+                    initialVanPlate = registrationNo.trim().takeIf { createInitialVan },
+                    initialVanName = vanName.trim().takeIf { createInitialVan }
+                )
+            )
+            if (!registration.isSuccessful) error("Company registration rejected: HTTP ${registration.code()}")
+            val owner = registration.body() ?: error("Company registration returned no membership")
+            check(owner.email.equals(userEmail, ignoreCase = true) && owner.role == "COMPANY_ADMIN") {
+                "Server membership did not match the verified owner"
+            }
             setBusinessName(companyName)
             setBusinessAddress(address)
             if (vatNumber.isNotBlank()) setVatNumber(vatNumber)
 
-            val newBizId = "biz_${UUID.randomUUID().toString().take(8)}"
+            val newBizId = owner.tenantId
             val newBusiness = Business(
                 businessId = newBizId,
                 name = companyName,
@@ -2610,7 +2568,7 @@ class KanakRepository(private val context: Context) {
 
             // Create initial van and staff if requested
             if (createInitialVan) {
-                val vId = "van_${UUID.randomUUID().toString().take(8)}"
+                val vId = owner.initialVanId ?: error("Initial van was not provisioned on server")
                 val newVan = Van(
                     vanId = vId,
                     businessId = newBizId,

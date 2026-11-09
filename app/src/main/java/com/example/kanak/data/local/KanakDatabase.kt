@@ -46,7 +46,7 @@ abstract class KanakDatabase : RoomDatabase() {
                     KanakDatabase::class.java,
                     "kanak_local_cache.db"
                 )
-                    .fallbackToDestructiveMigration()
+                    // A missing Room schema migration must not erase business records.
                     .build()
                     .also { INSTANCE = it }
             }

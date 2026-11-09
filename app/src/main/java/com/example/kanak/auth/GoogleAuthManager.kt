@@ -21,7 +21,9 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -131,40 +133,38 @@ class GoogleAuthManager(private val context: Context) {
     }
 
     /**
-     * Restores an existing session ONLY if verified by Firebase Auth or explicit demo mode.
-     * Prevents security flaws where placeholder tokens allowed unauthenticated bypass.
+     * Recover a fresh Firebase ID token. Never restore an expired token
+     * from unencrypted SharedPreferences or mistake Google ID token for Firebase.
      */
     private fun restoreSession() {
-        // Production check: Validate that Firebase Auth has an active current user
-        val currentUser = FirebaseAuth.getInstance().currentUser
-        if (currentUser == null) {
-            // No valid Firebase session: fail-closed, purge stale local credentials
-            prefs.edit().clear().apply()
+        val currentUser = FirebaseAuth.getInstance().currentUser ?: run {
+            prefs.edit().remove("id_token").apply()
             _authState.value = AuthState.Idle
             return
         }
-
-        val savedToken = prefs.getString("id_token", null)
-        val savedRole = prefs.getString("user_role", User.ROLE_STANDARD) ?: User.ROLE_STANDARD
-        val savedVanId = prefs.getString("assigned_van_id", null)
-        val savedVanCode = prefs.getString("assigned_van_code", null)
-
-        if (savedToken != null) {
-            _authState.value = AuthState.Authenticated(
-                user = User(
-                    userId = currentUser.uid,
-                    email = currentUser.email ?: "",
-                    role = savedRole,
-                    active = true,
-                    assignedVanId = savedVanId,
-                    assignedVanCode = savedVanCode
-                ),
-                idToken = savedToken
-            )
-        } else {
-            // Token missing; force re-authentication
-            prefs.edit().clear().apply()
-            _authState.value = AuthState.Idle
+        _authState.value = AuthState.Loading
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val freshToken = currentUser.getIdToken(false).await().token
+                    ?.takeIf { it.isNotBlank() } ?: error("Firebase session token unavailable")
+                if (FirebaseAuth.getInstance().currentUser?.uid != currentUser.uid) return@launch
+                prefs.edit().remove("id_token").apply()
+                _authState.value = AuthState.Authenticated(
+                    User(
+                        userId = currentUser.uid,
+                        email = currentUser.email.orEmpty(),
+                        role = prefs.getString("user_role", User.ROLE_STANDARD) ?: User.ROLE_STANDARD,
+                        active = true,
+                        assignedVanId = prefs.getString("assigned_van_id", null),
+                        assignedVanCode = prefs.getString("assigned_van_code", null)
+                    ),
+                    freshToken
+                )
+            } catch (e: Exception) {
+                Log.w("GoogleAuthManager", "Firebase session refresh failed", e)
+                if (FirebaseAuth.getInstance().currentUser?.uid == currentUser.uid)
+                    _authState.value = AuthState.Idle
+            }
         }
     }
 
@@ -262,15 +262,13 @@ class GoogleAuthManager(private val context: Context) {
                     assignedVanCode = assignedVanCode
                 )
 
-                // Persist session locally and sync to cloud profile
-                persistSession(user, idToken)
-                try {
-                    firebaseManager.syncUserToFirestore(user)
-                } catch (e: Exception) {
-                    Log.w("GoogleAuthManager", "Async cloud profile update: ${e.message}")
-                }
-
-                val state = AuthState.Authenticated(user, idToken)
+                // Firebase, not Google Credential Manager, issues backend bearer tokens.
+                val firebaseIdToken = firebaseUser.getIdToken(false).await().token
+                    ?.takeIf { it.isNotBlank() }
+                    ?: return@withContext AuthState.Error("Firebase ID token unavailable")
+                        .also { _authState.value = it }
+                persistSession(user)
+                val state = AuthState.Authenticated(user, firebaseIdToken)
                 _authState.value = state
                 return@withContext state
             } else {
@@ -305,14 +303,14 @@ class GoogleAuthManager(private val context: Context) {
         _authState.value = AuthState.Idle
     }
 
-    private fun persistSession(user: User, token: String) {
+    private fun persistSession(user: User) {
         prefs.edit()
             .putString("user_id", user.userId)
             .putString("user_email", user.email)
             .putString("user_role", user.role)
             .putString("assigned_van_id", user.assignedVanId)
             .putString("assigned_van_code", user.assignedVanCode)
-            .putString("id_token", token)
+            .remove("id_token")
             .apply()
     }
 }
