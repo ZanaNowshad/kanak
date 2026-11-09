@@ -1,6 +1,8 @@
 package com.example.kanak.auth
 
 import android.app.Activity
+import android.app.PendingIntent
+import android.content.Intent
 import android.content.Context
 import android.content.ContextWrapper
 import android.util.Log
@@ -25,6 +27,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+
+class OAuthConsentRequired(val pendingIntent: PendingIntent) : Exception("Google Sheets permission required")
 
 sealed class AuthState {
     object Idle : AuthState()
@@ -90,7 +94,7 @@ class GoogleAuthManager(private val context: Context) {
      * https://www.googleapis.com/auth/spreadsheets and https://www.googleapis.com/auth/drive.file
      * for full Google Sheets access.
      */
-    suspend fun requestGoogleSheetsOAuth(activityContext: Context? = null): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun requestGoogleSheetsOAuth(activityContext: Context? = null): Result<String> = withContext(Dispatchers.Main) {
         try {
             val resolvedActivity = (activityContext ?: context).findActivity() ?: activityContext ?: context
             val authorizationRequest = AuthorizationRequest.builder()
@@ -105,8 +109,7 @@ class GoogleAuthManager(private val context: Context) {
                 Log.i("GoogleAuthManager", "OAuth 2.0 access token acquired for Google Sheets & Drive")
                 Result.success(accessToken)
             } else if (result.hasResolution()) {
-                Log.i("GoogleAuthManager", "OAuth 2.0 requires user resolution, returning available session token")
-                Result.failure(IllegalStateException("Google Sheets consent must be completed before API access"))
+                Result.failure(OAuthConsentRequired(requireNotNull(result.pendingIntent)))
             } else {
                 Result.failure(IllegalStateException("Google Sheets access token not granted"))
             }
@@ -114,6 +117,15 @@ class GoogleAuthManager(private val context: Context) {
             Log.w("GoogleAuthManager", "OAuth 2.0 request exception: ${e.message}")
             Result.failure(e)
         }
+    }
+
+    fun completeGoogleSheetsOAuth(resultIntent: Intent?): Result<String> = runCatching {
+        val result = Identity.getAuthorizationClient(context)
+            .getAuthorizationResultFromIntent(requireNotNull(resultIntent))
+        val accessToken = result.accessToken?.takeIf { it.isNotBlank() }
+            ?: error("Google Sheets authorization was not granted")
+        setOAuthSheetsToken(accessToken)
+        accessToken
     }
 
     init {
