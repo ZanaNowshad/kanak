@@ -39,8 +39,7 @@ class GoogleSheetsSyncManager(
     private val TAG = "GoogleSheetsSyncManager"
 
     val sheetsService: GoogleSheetsService = GoogleSheetsService {
-        val authManager = com.example.kanak.auth.GoogleAuthManager(context)
-        authManager.getOAuthSheetsToken() ?: repository.currentAuthToken
+        com.example.kanak.auth.GoogleAuthManager.activeGoogleSheetsAccessToken()
     }
 
     val sheetsApiService: GoogleSheetsApiService get() = sheetsService.api
