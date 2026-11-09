@@ -1,6 +1,11 @@
 package com.example.kanak.ui.settings
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import android.app.Activity
+import com.example.kanak.auth.OAuthConsentRequired
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -183,6 +188,17 @@ private fun MainSettingsView(
     val oauthSheetsToken by authManager.oauthSheetsToken.collectAsState()
     var isAuthorizingSheets by remember { mutableStateOf(false) }
     var oauthSheetsStatus by remember { mutableStateOf<String?>(null) }
+    val oauthConsentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            authManager.completeGoogleSheetsOAuth(result.data)
+                .onSuccess { oauthSheetsStatus = "Google Sheets OAuth authorized." }
+                .onFailure { oauthSheetsStatus = "OAuth failed: ${it.message}" }
+        } else {
+            oauthSheetsStatus = "Google Sheets permission was not granted."
+        }
+    }
 
     val initials = remember(currentUser) {
         val email = currentUser.email
@@ -269,103 +285,6 @@ private fun MainSettingsView(
                 }
             }
 
-            // MASTER ADMIN LICENSE PORTAL (Visible to Owner / Admin)
-            if (isMaster || currentUser.isAdmin) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onNavigateToAdminLicensePortal?.invoke() },
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = KanakAccentLight),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, KanakPrimaryBlue)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(KanakPrimaryBlue),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = Color.White)
-                        }
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Master License Portal",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
-                            )
-                            Text(
-                                text = "Manage registrations & generate customer activation codes",
-                                style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
-                            )
-                        }
-
-                        Icon(Icons.Default.ChevronRight, contentDescription = "Open", tint = KanakPrimaryBlue)
-                    }
-                }
-            }
-
-            // Company License & Activation Status Card
-            if (companyProfile != null && companyProfile.companyName.isNotBlank()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = KanakSurface),
-                    border = CardDefaults.outlinedCardBorder()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Icon(Icons.Default.Verified, contentDescription = null, tint = KanakSuccess, modifier = Modifier.size(20.dp))
-                                Text(
-                                    text = "Licensed Company",
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
-                                )
-                            }
-
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = KanakSuccessBackground
-                            ) {
-                                Text(
-                                    text = "LIFETIME ACTIVE",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = KanakSuccess,
-                                        fontWeight = FontWeight.Bold
-                                    ),
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                )
-                            }
-                        }
-
-                        Text(
-                            text = companyProfile.companyName,
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold, color = KanakPrimaryText)
-                        )
-                        Text(
-                            text = "License ID: ${companyProfile.requestId} · Registered: ${companyProfile.registrationDate}",
-                            style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
-                        )
-                    }
-                }
-            }
-
             // Multi-Van Fleet Operations Card (Admins / Owners / Managers)
             if (currentUser.isOwner || currentUser.isManager || isMaster) {
                 Card(
@@ -427,10 +346,10 @@ private fun MainSettingsView(
                             modifier = Modifier
                                 .size(44.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFFFEF3C7)),
+                                .background(KanakAccentLight),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.Group, contentDescription = null, tint = Color(0xFFD97706))
+                            Icon(Icons.Default.Group, contentDescription = null, tint = KanakPrimaryBlue)
                         }
 
                         Column(modifier = Modifier.weight(1f)) {
@@ -810,12 +729,12 @@ private fun MainSettingsView(
 
                         Surface(
                             shape = RoundedCornerShape(6.dp),
-                            color = if (!oauthSheetsToken.isNullOrBlank()) KanakSuccessBackground else Color(0xFFFEF3C7)
+                            color = if (!oauthSheetsToken.isNullOrBlank()) KanakSuccessBackground else KanakAccentLight
                         ) {
                             Text(
                                 text = if (!oauthSheetsToken.isNullOrBlank()) "OAuth Active" else "Ready to Authorize",
                                 style = MaterialTheme.typography.labelSmall.copy(
-                                    color = if (!oauthSheetsToken.isNullOrBlank()) KanakSuccess else Color(0xFFD97706),
+                                    color = if (!oauthSheetsToken.isNullOrBlank()) KanakSuccess else KanakPrimaryBlue,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 11.sp
                                 ),
@@ -857,7 +776,13 @@ private fun MainSettingsView(
                                     res.onSuccess {
                                         oauthSheetsStatus = "OAuth 2.0 access active! Ready for direct Sheets create/read/append."
                                     }.onFailure { err ->
-                                        oauthSheetsStatus = "Authorization note: ${err.message}"
+                                        if (err is OAuthConsentRequired) {
+                                            oauthConsentLauncher.launch(
+                                                IntentSenderRequest.Builder(err.pendingIntent.intentSender).build()
+                                            )
+                                        } else {
+                                            oauthSheetsStatus = "Authorization error: ${err.message}"
+                                        }
                                     }
                                 }
                             },
@@ -884,7 +809,12 @@ private fun MainSettingsView(
                                     val service = com.example.kanak.data.remote.GoogleSheetsService {
                                         authManager.getOAuthSheetsToken()
                                     }
-                                    val sheetId = repository.getGoogleSheetId() ?: "master_sheet"
+                                    val sheetId = repository.getGoogleSheetId()
+                                    if (sheetId.isNullOrBlank() || authManager.getOAuthSheetsToken().isNullOrBlank()) {
+                                        isAuthorizingSheets = false
+                                        oauthSheetsStatus = "Connect a real Google Sheet and grant access first."
+                                        return@launch
+                                    }
                                     val readRes = service.readRows(sheetId, "Products!A1:J5")
                                     isAuthorizingSheets = false
                                     readRes.onSuccess { rows ->
@@ -1015,7 +945,7 @@ private fun MainSettingsView(
                             FilterChip(
                                 selected = configuredVatStr == "5.00" || configuredVatStr == "5",
                                 onClick = { configuredVatStr = "5.00" },
-                                label = { Text("5% Concessional") },
+                                label = { Text("5% Custom") },
                                 modifier = Modifier.testTag("vat_preset_5")
                             )
                             FilterChip(
@@ -1165,24 +1095,6 @@ private fun MainSettingsView(
             val productsCount by repository.products.collectAsState()
             val customersCount by repository.customers.collectAsState()
             val invoicesCount by repository.invoices.collectAsState()
-            var showClearConfirm by remember { mutableStateOf(false) }
-
-            if (showClearConfirm) {
-                KanakConfirmDialog(
-                    title = "Clear Local Database?",
-                    message = "This will remove all locally cached products, customers, and invoices on this device. You can re-sync from your Google Sheet at any time.",
-                    confirmText = "Clear Database",
-                    cancelText = "Keep Data",
-                    isDestructive = true,
-                    onConfirm = {
-                        repository.resetToEmptyProductionDatabase()
-                        showClearConfirm = false
-                        saveMessage = "Local database cleared to empty production state."
-                    },
-                    onDismiss = { showClearConfirm = false }
-                )
-            }
-
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -1220,16 +1132,6 @@ private fun MainSettingsView(
                             Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Sync Sheet")
-                        }
-                        OutlinedButton(
-                            onClick = { showClearConfirm = true },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = KanakError)
-                        ) {
-                            Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Clear Cache")
                         }
                     }
                 }
