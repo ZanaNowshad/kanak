@@ -41,8 +41,17 @@ android {
         keyPassword = keySecret
       }
     }
+  }
+
+  buildTypes {
+    release {
+      isCrunchPngs = false
+      isMinifyEnabled = false
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      signingConfig = signingConfigs.getByName("release")
+    }
     debug {
-      // Use the Android Gradle Plugin's standard per-runner debug key.
+      // Android Gradle Plugin generates a separate debug signing certificate.
     }
   }
   compileOptions {
