@@ -114,3 +114,96 @@ def test_anonymous_transfer_denied():
             "performed_by": "QA",
         })
     assert resp.status_code == 401
+
+
+def _outbox_request(operation_id, *, qty="1.000", van_id="van-own", operation="INSERT_INVOICE"):
+    return {
+        "tenant_id": "tenant-a",
+        "device_id": "qa-android-device",
+        "van_id": van_id,
+        "items": [{
+            "operation": operation,
+            "entity_id": operation_id,
+            "timestamp": "2026-11-09T10:00:00+03:00",
+            "payload": {
+                "invoice_id": operation_id,
+                "invoice_number": "INV-QA-001",
+                "customer_id": "cust-a",
+                "customer_name": "Test Customer",
+                "payment_type": "CASH",
+                "van_id": van_id,
+                "lines": [{
+                    "product_id": "prod-a",
+                    "product_name": "Test Product",
+                    "qty": qty,
+                    "unit_price": "1.100",
+                    "vat_rate": "0.100",
+                }],
+            },
+        }],
+    }
+
+
+def test_outbox_replay_is_idempotent_and_stock_conserved(retail_client):
+    from uuid import uuid4
+    from backend.app.models.entities import Invoice, StockLedger
+    client, db = retail_client
+    db.add(VanStockAllowance(
+        tenant_id="tenant-a", van_id="van-own", product_id="prod-a",
+        assigned_quantity=Decimal("5.000"), current_quantity=Decimal("5.000")
+    ))
+    db.commit()
+    operation_id = str(uuid4())
+    req = _outbox_request(operation_id)
+    first = client.post("/api/v1/sync/outbox/flush", json=req)
+    assert first.status_code == 200, first.text
+    assert first.json()["acknowledged_ids"] == [operation_id]
+    assert db.query(Invoice).count() == 1
+    remaining = db.query(VanStockAllowance).filter(VanStockAllowance.van_id == "van-own").one()
+    assert remaining.current_quantity == Decimal("4.000")
+
+    replay = client.post("/api/v1/sync/outbox/flush", json=req)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["acknowledged_ids"] == [operation_id]
+    db.refresh(remaining)
+    assert remaining.current_quantity == Decimal("4.000")
+    assert db.query(Invoice).count() == 1
+    assert db.query(StockLedger).filter(StockLedger.movement_type == "VAN_SALE").count() == 1
+
+    changed = client.post(
+        "/api/v1/sync/outbox/flush",
+        json=_outbox_request(operation_id, qty="2.000"),
+    )
+    assert changed.status_code == 200
+    assert changed.json()["rejected_ids"] == [operation_id]
+    assert db.query(Invoice).count() == 1
+    db.refresh(remaining)
+    assert remaining.current_quantity == Decimal("4.000")
+
+
+def test_outbox_rejects_unassigned_van_and_unsupported_mutations(retail_client):
+    from uuid import uuid4
+    from backend.app.models.entities import Invoice
+    client, db = retail_client
+    alien = str(uuid4())
+    resp = client.post(
+        "/api/v1/sync/outbox/flush", json=_outbox_request(alien, van_id="van-other")
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["rejected_ids"] == [alien]
+    assert db.query(Invoice).count() == 0
+
+    unsupported = str(uuid4())
+    req = _outbox_request(unsupported, operation="ADJUST_STOCK")
+    response = client.post("/api/v1/sync/outbox/flush", json=req)
+    assert response.status_code == 200
+    assert response.json()["rejected_ids"] == [unsupported]
+    assert db.query(Invoice).count() == 0
+
+
+def test_anonymous_outbox_cannot_submit_financial_records():
+    from uuid import uuid4
+    request = _outbox_request(str(uuid4()))
+    with TestClient(app) as client:
+        response = client.post("/api/v1/sync/outbox/flush", json=request)
+    assert response.status_code == 401
