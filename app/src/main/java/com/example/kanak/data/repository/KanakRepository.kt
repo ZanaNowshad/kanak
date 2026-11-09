@@ -898,13 +898,17 @@ class KanakRepository(private val context: Context) {
 
         // Check van stock if van is specified
         if (vanId.isNotBlank()) {
+            // An unallocated van has zero stock, not unlimited stock.
             val vanStockMap = _vanStocks.value[vanId] ?: emptyMap()
-            for (item in proposedLines) {
-                val availableInVan = vanStockMap[item.productId] ?: BigDecimal.ZERO
-                // If van has inventory tracking and stock is less than requested
-                if (vanStockMap.isNotEmpty() && availableInVan < item.qty) {
-                    val prod = _products.value.find { it.productId == item.productId }
-                    return Result.failure(IllegalStateException("Insufficient van stock for '${prod?.name ?: item.productId}' in $vanCode. Available: $availableInVan, requested: ${item.qty}"))
+            val requiredByProduct = proposedLines.groupBy { it.productId }
+                .mapValues { (_, lines) -> lines.fold(BigDecimal.ZERO) { sum, line -> sum + line.qty } }
+            for ((productId, requiredQty) in requiredByProduct) {
+                val availableInVan = vanStockMap[productId] ?: BigDecimal.ZERO
+                if (requiredQty > availableInVan) {
+                    val productName = _products.value.find { it.productId == productId }?.name ?: productId
+                    return Result.failure(IllegalStateException(
+                        "Insufficient van stock for '$productName' in $vanCode. Available: $availableInVan, requested: $requiredQty"
+                    ))
                 }
             }
         }
@@ -1086,7 +1090,8 @@ class KanakRepository(private val context: Context) {
         }
 
         val scaledPayment = BahrainFinancials.scaleAmount(amountToPay)
-        val newAmountPaid = invoice.amountPaid.add(scaledPayment).min(invoice.total)
+        if (scaledPayment > remainingBalance) return Result.failure(IllegalArgumentException("Payment exceeds invoice balance"))
+        val newAmountPaid = invoice.amountPaid.add(scaledPayment)
         val newStatus = if (newAmountPaid >= invoice.total) {
             Invoice.PAYMENT_STATUS_PAID
         } else {
@@ -1324,12 +1329,8 @@ class KanakRepository(private val context: Context) {
                 db.customerDao().insertAll(_customers.value.map { com.example.kanak.data.local.CustomerEntity.fromDomain(it) })
                 db.supplierDao().insertAll(_suppliers.value.map { com.example.kanak.data.local.SupplierEntity.fromDomain(it) })
                 db.purchaseDao().insertAll(_purchases.value.map { com.example.kanak.data.local.PurchaseEntity.fromDomain(it) })
-                _invoices.value.forEach { inv ->
-                    db.invoiceDao().insertFullInvoice(
-                        com.example.kanak.data.local.InvoiceEntity.fromDomain(inv),
-                        inv.lines.map { com.example.kanak.data.local.InvoiceLineEntity.fromDomain(it) }
-                    )
-                }
+                // Invoices are inserted only by the transactional checkout flow.
+                // Blind REPLACE here used to reset SYNCED invoices to PENDING.
                 db.stockAdjustmentDao().insertAll(_stockAdjustments.value.map { com.example.kanak.data.local.StockAdjustmentEntity.fromDomain(it) })
             } catch (e: Exception) {
                 android.util.Log.w("KanakRepository", "Room save error: ${e.message}")
