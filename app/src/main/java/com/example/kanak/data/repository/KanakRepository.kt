@@ -1080,7 +1080,13 @@ class KanakRepository(private val context: Context) {
         refreshPendingSyncCount()
 
         // One durable outbox owns financial delivery. No duplicate fire-and-forget writes.
-        com.example.kanak.data.sync.GoogleSheetsSyncWorker.enqueueImmediateSync(context)
+        try {
+            com.example.kanak.data.sync.GoogleSheetsSyncWorker.enqueueImmediateSync(context)
+        } catch (e: IllegalStateException) {
+            // WorkManager scheduling can fail on a freshly initialized/test process.
+            // The SQLite outbox has already committed; it remains pending for retry.
+            android.util.Log.w("KanakRepository", "Background scheduling unavailable; sale safely queued", e)
+        }
         return Result.success(invoice)
     }
 
