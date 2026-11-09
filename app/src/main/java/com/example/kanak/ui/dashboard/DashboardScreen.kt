@@ -60,6 +60,20 @@ fun DashboardScreen(
 
     val isOwner = currentUser.isOwner || isMasterAdmin
     val isSalesperson = currentUser.isSalesperson && !isOwner
+    val syncState by repository.syncState.collectAsState()
+    val isOnline by repository.isOnline.collectAsState()
+    val pendingCount by repository.pendingSyncCount.collectAsState()
+    var showProfileMenu by remember { mutableStateOf(false) }
+    var showSyncStatus by remember { mutableStateOf(false) }
+    val assignedVan = vans.firstOrNull { it.vanId == currentUser.assignedVanId }
+    val syncColor = when {
+        !isOnline -> KanakError
+        syncState == KanakRepository.SyncState.CONFLICT -> KanakError
+        syncState == KanakRepository.SyncState.SYNCING -> KanakPrimaryBlue
+        pendingCount > 0 -> Color(0xFFD97706)
+        repository.getGoogleSheetId().isNullOrBlank() -> KanakSecondaryText
+        else -> KanakSuccess
+    }
 
     val todayDateFormatted = remember {
         val df = SimpleDateFormat("EEE, d MMM yyyy", Locale.US).apply {
@@ -118,51 +132,37 @@ fun DashboardScreen(
                     }
                 },
                 actions = {
-                    // Admin Portal Button for zanabalmuhamed@gmail.com
-                    if (isMasterAdmin) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFFFEF3C7),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B)),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onNavigateToAdminLicensePortal?.invoke() }
-                                .testTag("topbar_admin_portal_button")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                            ) {
-                                Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("PLATFORM ADMIN", style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF92400E), fontWeight = FontWeight.Bold, fontSize = 10.sp))
+                    IconButton(onClick = { showSyncStatus = true },
+                        modifier = Modifier.size(36.dp).testTag("dashboard_sync_status_button")) {
+                        Icon(Icons.Default.Circle, contentDescription = "Connection and sync status",
+                            tint = syncColor, modifier = Modifier.size(15.dp))
+                    }
+                    Box {
+                        Surface(shape = CircleShape, color = KanakAccentLight,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, KanakPrimaryBlue.copy(alpha = 0.4f)),
+                            modifier = Modifier.size(36.dp).clip(CircleShape)
+                                .clickable { showProfileMenu = true }
+                                .testTag("dashboard_profile_menu_button")) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(currentUser.initials, color = KanakPrimaryBlue,
+                                    style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                             }
                         }
-                        Spacer(modifier = Modifier.width(6.dp))
-                    }
-
-                    // Avatar button navigating to settings
-                    Surface(
-                        shape = CircleShape,
-                        color = if (isMasterAdmin) Color(0xFFFEF3C7) else KanakAccentLight,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isMasterAdmin) Color(0xFFF59E0B) else KanakPrimaryBlue.copy(alpha = 0.4f)),
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .clickable(onClick = onNavigateToSettings)
-                            .testTag("dashboard_settings_button")
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = currentUser.initials,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isMasterAdmin) Color(0xFF92400E) else KanakPrimaryBlue
-                                )
-                            )
+                        DropdownMenu(expanded = showProfileMenu,
+                            onDismissRequest = { showProfileMenu = false }) {
+                            DropdownMenuItem(text = { Text(if (assignedVan != null)
+                                "Assigned VAN: ${assignedVan.vanCode} - ${assignedVan.vanName}"
+                                else "Assigned VAN: None") },
+                                onClick = { showProfileMenu = false },
+                                leadingIcon = { Icon(Icons.Default.DirectionsBus, null) },
+                                modifier = Modifier.testTag("profile_assigned_van"))
+                            HorizontalDivider()
+                            DropdownMenuItem(text = { Text("Settings") },
+                                onClick = { showProfileMenu = false; onNavigateToSettings() },
+                                leadingIcon = { Icon(Icons.Default.Settings, null) })
                         }
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(Modifier.width(12.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = KanakBackground,
@@ -431,6 +431,22 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(80.dp))
             }
         }
+    }
+    if (showSyncStatus) {
+        AlertDialog(
+            onDismissRequest = { showSyncStatus = false },
+            title = { Text("Connection and sync") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (isOnline) "Network connected" else "Offline")
+                Text("Sync state: ${syncState.name}")
+                Text("Pending records: $pendingCount")
+                if (repository.getGoogleSheetId().isNullOrBlank())
+                    Text("Google Sheets is not connected", color = KanakSecondaryText)
+                if (syncState == KanakRepository.SyncState.CONFLICT)
+                    Text("Sync conflict: check Settings", color = KanakError)
+            } },
+            confirmButton = { TextButton(onClick = { showSyncStatus = false }) { Text("Close") } }
+        )
     }
 }
 
