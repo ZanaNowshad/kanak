@@ -1,6 +1,7 @@
 package com.example.kanak.data.repository
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.example.kanak.data.remote.GatewayRequest
 import com.example.kanak.data.remote.KanakApiService
 import com.example.kanak.domain.financial.BahrainFinancials
@@ -982,7 +983,8 @@ class KanakRepository(private val context: Context) {
             idempotencyKey = invoiceId
         )
 
-        // Deduct van stock if van is specified
+        // Stage van balance; no business state may change before SQLite commit.
+        var committedVanStocks = _vanStocks.value
         if (vanId.isNotBlank()) {
             val currentVanStocks = _vanStocks.value.toMutableMap()
             val vanStockMap = (currentVanStocks[vanId] ?: emptyMap()).toMutableMap()
@@ -991,17 +993,13 @@ class KanakRepository(private val context: Context) {
                 vanStockMap[item.productId] = currentQty.subtract(item.qty).max(BigDecimal.ZERO)
             }
             currentVanStocks[vanId] = vanStockMap
-            _vanStocks.value = currentVanStocks
+            committedVanStocks = currentVanStocks
         }
 
-        // Commit atomically to state
-        _products.value = updatedProducts
-        _invoices.value = listOf(invoice) + _invoices.value
-        recalculateDashboard()
-
-        // Insert into Room database with PENDING status for offline resilience
+        // Invoice + lines + stock + durable outbox are one Room transaction.
         try {
             withContext(Dispatchers.IO) {
+                roomDb.withTransaction {
                 roomDb.invoiceDao().insertFullInvoice(
                     com.example.kanak.data.local.InvoiceEntity.fromDomain(invoice, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_PENDING),
                     invoice.lines.map { com.example.kanak.data.local.InvoiceLineEntity.fromDomain(it) }
@@ -1044,49 +1042,20 @@ class KanakRepository(private val context: Context) {
                         payloadJson = jsonPayload
                     )
                 )
+                }
             }
         } catch (e: Exception) {
-            android.util.Log.w("KanakRepository", "Offline invoice cache error: ${e.message}")
+            android.util.Log.e("KanakRepository", "Invoice transaction failed", e)
+            return Result.failure(IllegalStateException("Invoice not saved; no sale was posted", e))
         }
+        _vanStocks.value = committedVanStocks
+        _products.value = updatedProducts
+        _invoices.value = listOf(invoice) + _invoices.value
+        recalculateDashboard()
         refreshPendingSyncCount()
 
-        // Sync with Google Sheets backend
-        syncToGatewayIfConfigured("create_invoice", mapOf(
-            "invoice_id" to invoice.invoiceId,
-            "invoice_number" to invoice.invoiceNumber,
-            "customer_id" to invoice.customerId,
-            "customer_name" to invoice.customerName,
-            "date" to invoice.date,
-            "subtotal" to invoice.subtotal.toPlainString(),
-            "vat_total" to invoice.vatTotal.toPlainString(),
-            "total" to invoice.total.toPlainString(),
-            "status" to invoice.status,
-            "created_by" to invoice.createdBy,
-            "payment_type" to invoice.paymentType,
-            "payment_status" to invoice.paymentStatus,
-            "amount_paid" to invoice.amountPaid.toPlainString(),
-            "lines" to invoice.lines.map { l ->
-                mapOf(
-                    "line_id" to l.lineId,
-                    "product_id" to l.productId,
-                    "product_name" to l.productName,
-                    "qty" to l.qty.toPlainString(),
-                    "unit_price" to l.unitPrice.toPlainString(),
-                    "vat_rate" to l.vatRate.toPlainString(),
-                    "vat_amount" to l.vatAmount.toPlainString(),
-                    "line_total" to l.lineTotal.toPlainString()
-                )
-            }
-        ))
-
-        // Cloud backup to Firebase Firestore
-        scope.launch {
-            try {
-                firebaseManager.backupInvoiceToFirestore(invoice, createdBy)
-            } catch (_: Exception) {
-            }
-        }
-
+        // One durable outbox owns financial delivery. No duplicate fire-and-forget writes.
+        com.example.kanak.data.sync.GoogleSheetsSyncWorker.enqueueImmediateSync(context)
         return Result.success(invoice)
     }
 
@@ -1788,67 +1757,10 @@ class KanakRepository(private val context: Context) {
      * and pushes them to the authoritative Google Sheets document via the Google Apps Script Gateway.
      * Marks synced documents in Firestore upon confirmation.
      */
-    suspend fun pushFirestoreSalesToGoogleSheets(): Result<Int> = mutationMutex.withLock {
-        val gatewayUrl = getGatewayUrl()
-        if (gatewayUrl.isNullOrBlank()) {
-            return Result.failure(IllegalStateException("Google Sheets Gateway URL is not configured."))
-        }
-
-        try {
-            val pendingSalesResult = firebaseManager.getCompletedSalesForSheetsSync()
-            val salesToPush = pendingSalesResult.getOrThrow()
-            if (salesToPush.isEmpty()) {
-                return Result.success(0)
-            }
-
-            var pushedCount = 0
-            val token = requireNotNull(currentAuthToken?.takeIf { it.isNotBlank() }) { "Sign in before using Google Sheets Gateway" }
-
-            for (invoice in salesToPush) {
-                val payload = mapOf(
-                    "invoice_id" to invoice.invoiceId,
-                    "invoice_number" to invoice.invoiceNumber,
-                    "customer_id" to invoice.customerId,
-                    "customer_name" to invoice.customerName,
-                    "date" to invoice.date,
-                    "subtotal" to invoice.subtotal.toPlainString(),
-                    "vat_total" to invoice.vatTotal.toPlainString(),
-                    "total" to invoice.total.toPlainString(),
-                    "status" to invoice.status,
-                    "created_by" to invoice.createdBy,
-                    "payment_type" to invoice.paymentType,
-                    "payment_status" to invoice.paymentStatus,
-                    "amount_paid" to invoice.amountPaid.toPlainString(),
-                    "lines" to invoice.lines.map { l ->
-                        mapOf(
-                            "line_id" to l.lineId,
-                            "product_id" to l.productId,
-                            "product_name" to l.productName,
-                            "qty" to l.qty.toPlainString(),
-                            "unit_price" to l.unitPrice.toPlainString(),
-                            "vat_rate" to l.vatRate.toPlainString(),
-                            "vat_amount" to l.vatAmount.toPlainString(),
-                            "line_total" to l.lineTotal.toPlainString()
-                        )
-                    }
-                )
-
-                val req = GatewayRequest(action = "create_invoice", idToken = token, payload = payload)
-                val resp = apiService.executeGatewayAction(gatewayUrl, req)
-                if (resp.isSuccessful && resp.body()?.success == true) {
-                    firebaseManager.markSaleSyncedToSheets(invoice.invoiceId)
-                    try {
-                        roomDb.invoiceDao().updateSyncStatus(invoice.invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED)
-                    } catch (_: Exception) {}
-                    pushedCount++
-                }
-            }
-
-            return Result.success(pushedCount)
-        } catch (e: Exception) {
-            return Result.failure(e)
-        }
-    }
+    suspend fun pushFirestoreSalesToGoogleSheets(): Result<Int> =
+        Result.failure(UnsupportedOperationException(
+            "Unsafe Firestore-to-Sheets invoice replay disabled; use durable outbox."
+        ))
 
     /**
      * Retrieves all pending sales transactions stored in the local SQLite Room database.
@@ -1889,30 +1801,41 @@ class KanakRepository(private val context: Context) {
      * Flushes offline mutations recorded in the Room sync queue to the Google Sheets gateway.
      */
     suspend fun flushPendingRoomSyncQueue(): Result<Int> {
-        val gatewayUrl = getGatewayUrl() ?: return Result.success(0)
-        if (gatewayUrl.isBlank()) return Result.success(0)
-
         return try {
             val pending = roomDb.syncQueueDao().getPendingItems()
-            var count = 0
-            val token = requireNotNull(currentAuthToken?.takeIf { it.isNotBlank() }) { "Sign in before using Google Sheets Gateway" }
+            if (pending.isEmpty()) return Result.success(0)
+            val gatewayUrl = getGatewayUrl()?.takeIf { it.isNotBlank() }
+                ?: return Result.failure(IllegalStateException("Transaction gateway is not configured"))
+            val token = currentAuthToken?.takeIf { it.isNotBlank() }
+                ?: return Result.failure(IllegalStateException("Sign in before syncing queued operations"))
+            var sent = 0
+            val failures = mutableListOf<String>()
             for (item in pending) {
                 try {
                     @Suppress("UNCHECKED_CAST")
-                    val payload = moshi.adapter(Map::class.java).fromJson(item.payloadJson) as? Map<String, Any?> ?: emptyMap()
-                    val req = GatewayRequest(action = item.action, idToken = token, payload = payload)
-                    val resp = apiService.executeGatewayAction(gatewayUrl, req)
-                    if (resp.isSuccessful && resp.body()?.success == true) {
+                    val payload = moshi.adapter(Map::class.java).fromJson(item.payloadJson) as? Map<String, Any?>
+                        ?: error("Unreadable queued operation")
+                    val response = apiService.executeGatewayAction(
+                        gatewayUrl, GatewayRequest(item.action, token, payload)
+                    )
+                    if (!response.isSuccessful || response.body()?.success != true)
+                        error(response.body()?.error ?: "Gateway HTTP ${response.code()}")
+                    roomDb.withTransaction {
+                        val invoiceId = payload["invoice_id"]?.toString()
+                        if (item.action == "create_invoice" && !invoiceId.isNullOrBlank())
+                            roomDb.invoiceDao().updateSyncStatus(
+                                invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED
+                            )
                         roomDb.syncQueueDao().deleteById(item.queueId)
-                        count++
-                    } else {
-                        roomDb.syncQueueDao().markFailed(item.queueId, resp.body()?.error ?: "HTTP ${resp.code()}")
                     }
+                    sent++
                 } catch (e: Exception) {
                     roomDb.syncQueueDao().markFailed(item.queueId, e.message)
+                    failures.add("Queue ${item.queueId}: ${e.message}")
                 }
             }
-            Result.success(count)
+            if (failures.isNotEmpty()) Result.failure(IllegalStateException(failures.joinToString("; ")))
+            else Result.success(sent)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -1925,49 +1848,23 @@ class KanakRepository(private val context: Context) {
     suspend fun syncAllPendingNow(): Result<Int> = mutationMutex.withLock {
         if (!_isOnline.value) {
             updateSyncState()
-            return Result.failure(IllegalStateException("Device is offline. Changes are stored locally in Room database."))
+            return Result.failure(IllegalStateException("Offline: transactions remain queued"))
         }
-
         _isSyncing.value = true
         updateSyncState()
         try {
-            var syncedCount = 0
-
-            // 1. Back up pending local Room invoices to Firestore
-            val pendingEntities = roomDb.invoiceDao().getInvoicesBySyncStatus(com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_PENDING)
-            for (pEntity in pendingEntities) {
-                val fullInv = roomDb.invoiceDao().getInvoiceWithLinesById(pEntity.invoiceId)?.toDomain()
-                if (fullInv != null) {
-                    val fbResult = firebaseManager.backupInvoiceToFirestore(fullInv, fullInv.createdBy)
-                    if (fbResult.isSuccess) {
-                        roomDb.invoiceDao().updateSyncStatus(fullInv.invoiceId, com.example.kanak.data.local.InvoiceEntity.SYNC_STATUS_SYNCED)
-                        syncedCount++
-                    } else {
-                        android.util.Log.w("KanakRepository", "Firestore backup retry: ${fbResult.exceptionOrNull()?.message}")
-                    }
-                }
-            }
-
-            // 2. Push Firestore sales to authoritative Google Sheets
-            val sheetsResult = pushFirestoreSalesToGoogleSheets()
-            syncedCount += sheetsResult.getOrNull() ?: 0
-
-            // 3. Flush any pending Room sync queue mutations
-            val queueResult = flushPendingRoomSyncQueue()
-            syncedCount += queueResult.getOrNull() ?: 0
-
-            refreshPendingSyncCount()
-            _conflictCount.value = 0
-            _conflictMessage.value = null
+            // No nested mutex and no unvalidated Firestore replica writes.
+            val sent = flushPendingRoomSyncQueue().getOrThrow()
             _lastSyncError.value = null
-            updateSyncState()
-            Result.success(syncedCount)
+            refreshPendingSyncCount()
+            Result.success(sent)
         } catch (e: Exception) {
             _lastSyncError.value = e.message
             updateSyncState()
             Result.failure(e)
         } finally {
             _isSyncing.value = false
+            refreshPendingSyncCount()
             updateSyncState()
         }
     }
@@ -2019,7 +1916,7 @@ class KanakRepository(private val context: Context) {
                     return Business(
                         businessId = m["business_id"]?.toString() ?: "biz_001",
                         name = m["name"]?.toString() ?: getBusinessName(),
-                        crNumber = m["cr_number"]?.toString() ?: "123456-1",
+                        crNumber = m["cr_number"]?.toString() ?: "",
                         vatNumber = m["vat_number"]?.toString() ?: getVatNumber(),
                         ownerEmail = m["owner_email"]?.toString() ?: "zanabalmuhamed@gmail.com",
                         ownerName = m["owner_name"]?.toString() ?: "Zanabal Mohamed",
@@ -2034,7 +1931,7 @@ class KanakRepository(private val context: Context) {
         return Business(
             businessId = "biz_001",
             name = getBusinessName(),
-            crNumber = "123456-1",
+            crNumber = "",
             vatNumber = getVatNumber(),
             ownerEmail = "zanabalmuhamed@gmail.com",
             ownerName = "Zanabal Mohamed",
