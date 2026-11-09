@@ -190,7 +190,7 @@ interface SyncQueueDao {
     suspend fun update(item: SyncQueueEntity)
 
     @Query("UPDATE sync_queue SET status = :status, lastError = :error, retryCount = retryCount + 1 WHERE queueId = :queueId")
-    suspend fun markFailed(queueId: Long, error: String?, status: String = SyncQueueEntity.STATUS_FAILED)
+    suspend fun markFailed(queueId: Long, error: String?, status: String = SyncQueueEntity.STATUS_PENDING)
 
     @Query("DELETE FROM sync_queue WHERE queueId = :queueId")
     suspend fun deleteById(queueId: Long)
