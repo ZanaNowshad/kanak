@@ -23,17 +23,16 @@ function authenticateAndAuthorize(ss, idToken, requiredRole) {
     const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (resp.getResponseCode() === 200) {
       const payload = JSON.parse(resp.getContentText());
+      const allowedAudience = PropertiesService.getScriptProperties().getProperty('GOOGLE_OAUTH_CLIENT_ID');
+      if (!allowedAudience || payload.aud !== allowedAudience ||
+          !['true', true].includes(payload.email_verified)) {
+        throw new Error('Google ID token audience/email validation failed');
+      }
       verifiedEmail = payload.email;
       verifiedSub = payload.sub;
     }
   } catch (e) {
     // If external fetch fails, check if running in local test mode
-  }
-
-  // For testing or direct execution fallback:
-  if (!verifiedSub && idToken.startsWith('demo_token_')) {
-    verifiedSub = idToken.replace('demo_token_', '');
-    verifiedEmail = verifiedSub + '@kanak-fmcg.bh';
   }
 
   if (!verifiedSub) {
@@ -55,7 +54,7 @@ function authenticateAndAuthorize(ss, idToken, requiredRole) {
     const uId = String(row[0]);
     const uEmail = String(row[1]);
     const uRole = String(row[2]).toLowerCase();
-    const uActive = Boolean(row[3]);
+    const uActive = row[3] === true || String(row[3]).trim().toLowerCase() === 'true';
 
     if (uId === verifiedSub || uEmail.toLowerCase() === (verifiedEmail || '').toLowerCase()) {
       if (!uActive) {
@@ -69,16 +68,6 @@ function authenticateAndAuthorize(ss, idToken, requiredRole) {
       };
       break;
     }
-  }
-
-  // If initial deployment, allow effective owner as admin
-  if (!matchedUser && verifiedEmail === Session.getEffectiveUser().getEmail()) {
-    matchedUser = {
-      userId: verifiedSub,
-      email: verifiedEmail,
-      role: 'admin',
-      active: true
-    };
   }
 
   if (!matchedUser) {

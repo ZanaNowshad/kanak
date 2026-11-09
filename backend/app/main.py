@@ -10,8 +10,7 @@ from backend.app.routers import (
     customers_router,
     suppliers_router,
     inventory_router,
-    sync_router,
-    admin_router
+    sync_router
 )
 
 # Initialize database schema tables on startup
@@ -43,7 +42,6 @@ app.include_router(customers_router, prefix=settings.API_V1_STR)
 app.include_router(suppliers_router, prefix=settings.API_V1_STR)
 app.include_router(inventory_router, prefix=settings.API_V1_STR)
 app.include_router(sync_router, prefix=settings.API_V1_STR)
-app.include_router(admin_router, prefix=settings.API_V1_STR)
 
 @app.get("/health", tags=["Health"])
 def health_check():
