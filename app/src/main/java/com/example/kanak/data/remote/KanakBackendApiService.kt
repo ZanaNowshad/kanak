@@ -31,4 +31,36 @@ interface KanakBackendApiService {
         @Header("Authorization") authorization: String,
         @Body company: RegisterCompanyRequest
     ): Response<RegisteredCompanyResponse>
+
+    @POST("api/v1/sync/outbox/flush")
+    suspend fun flushOutbox(
+        @Header("Authorization") authorization: String,
+        @Body request: OutboxUploadRequest
+    ): Response<OutboxUploadResponse>
 }
+
+@JsonClass(generateAdapter = true)
+data class OutboxUploadItem(
+    val operation: String,
+    @Json(name = "entity_id") val entityId: String,
+    val payload: Map<String, Any?>,
+    val timestamp: String
+)
+
+@JsonClass(generateAdapter = true)
+data class OutboxUploadRequest(
+    @Json(name = "tenant_id") val tenantId: String,
+    @Json(name = "device_id") val deviceId: String,
+    @Json(name = "van_id") val vanId: String?,
+    val items: List<OutboxUploadItem>
+)
+
+@JsonClass(generateAdapter = true)
+data class OutboxUploadResponse(
+    val success: Boolean,
+    @Json(name = "processed_count") val processedCount: Int,
+    @Json(name = "rejected_count") val rejectedCount: Int,
+    @Json(name = "acknowledged_ids") val acknowledgedIds: List<String>,
+    @Json(name = "rejected_ids") val rejectedIds: List<String>,
+    val errors: List<String>
+)
