@@ -2508,14 +2508,6 @@ class KanakRepository(private val context: Context) {
             )
         }
 
-        return baseUser.copy(
-                role = User.ROLE_OWNER,
-                businessId = getBusinessId(),
-                businessName = companyNameStr,
-                permissions = KanakPermissions.ALL_PERMISSIONS
-            )
-        }
-
         return baseUser
     }
 
