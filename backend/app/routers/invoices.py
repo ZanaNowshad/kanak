@@ -10,8 +10,9 @@ from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 
 from backend.app.database import get_db
-from backend.app.models.entities import Invoice, InvoiceLine, Product, Customer, VanStockAllowance, StockLedger, Tenant
+from backend.app.models.entities import Invoice, InvoiceLine, Product, Customer, VanStockAllowance, StockLedger, Tenant, User, Van
 from backend.app.schemas.schemas import InvoiceCreate, InvoiceResponse
+from backend.app.security import get_authenticated_user
 
 router = APIRouter(prefix="/invoices", tags=["Invoices"])
 
@@ -35,6 +36,11 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
     if not req.lines:
         raise HTTPException(status_code=400, detail="Invoice must contain at least one line item")
 
+    # Tenant-bound object validation; never decrement inventory in another company.
+    if req.van_id is not None:
+        van = db.query(Van).filter(Van.id == req.van_id, Van.tenant_id == req.tenant_id).first()
+        if van is None:
+            raise HTTPException(status_code=404, detail="Van not found")
     # Verify customer
     customer = db.query(Customer).filter(Customer.id == req.customer_id, Customer.tenant_id == req.tenant_id).first()
     if not customer:
@@ -47,10 +53,17 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
     processed_lines = []
 
     for item in req.lines:
+        product = db.query(Product).filter(Product.id == item.product_id,
+                                           Product.tenant_id == req.tenant_id,
+                                           Product.is_active.is_(True)).first()
+        if product is None:
+            raise HTTPException(status_code=404, detail="Product not found")
         qty = quantize_bhd(Decimal(str(item.quantity)))
         unit_price = quantize_bhd(Decimal(str(item.unit_price)))
         vat_rate = quantize_bhd(Decimal(str(item.vat_rate)))
 
+        if qty <= 0 or unit_price < 0 or vat_rate < 0:
+            raise HTTPException(status_code=400, detail="Invalid invoice quantity or price")
         line_gross = quantize_bhd(qty * unit_price)
         one_plus_rate = Decimal("1.000") + vat_rate
         line_net = quantize_bhd(line_gross / one_plus_rate)
@@ -119,10 +132,13 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
         if req.van_id:
             van_allowance = db.query(VanStockAllowance).filter(
                 VanStockAllowance.van_id == req.van_id,
+                VanStockAllowance.tenant_id == req.tenant_id,
                 VanStockAllowance.product_id == pline["product_id"]
             ).first()
-            if van_allowance:
-                van_allowance.current_quantity = max(Decimal("0.000"), van_allowance.current_quantity - pline["quantity"])
+            if not van_allowance or van_allowance.current_quantity < pline["quantity"]:
+                db.rollback()
+                raise HTTPException(status_code=409, detail="Insufficient van stock")
+            van_allowance.current_quantity -= pline["quantity"]
 
         # Write immutable stock ledger movement
         movement = StockLedger(
@@ -147,11 +163,13 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db)):
     return invoice
 
 @router.get("/{invoice_id}/pdf")
-def generate_tax_invoice_pdf(invoice_id: str, db: Session = Depends(get_db)):
+def generate_tax_invoice_pdf(invoice_id: str, db: Session = Depends(get_db),
+                             user: User = Depends(get_authenticated_user)):
     """
     Renders an authoritative, vector A4 Bahrain Tax Invoice conforming to NBR standards.
     """
-    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    invoice = db.query(Invoice).filter(Invoice.id == invoice_id,
+                                       Invoice.tenant_id == user.tenant_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
