@@ -14,7 +14,7 @@ import org.robolectric.annotation.Config
 import java.math.BigDecimal
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class KanakRepositoryRobolectricTest {
 
     private lateinit var context: Context
