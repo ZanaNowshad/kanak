@@ -18,6 +18,8 @@ android {
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
+    // Required for cloud-backed release builds; never fall back to localhost.
+    buildConfigField("String", "KANAK_API_BASE_URL", "\\"\${System.getenv("KANAK_API_BASE_URL").orEmpty()}\\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

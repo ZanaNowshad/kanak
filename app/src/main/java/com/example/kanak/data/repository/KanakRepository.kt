@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.withTransaction
 import com.example.kanak.data.remote.GatewayRequest
 import com.example.kanak.data.remote.KanakApiService
+import com.example.kanak.data.remote.KanakBackendApiService
+import com.example.kanak.data.remote.RegisterCompanyRequest
 import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.domain.models.*
 import com.example.kanak.images.BingThumbnailUrlBuilder
@@ -45,7 +47,7 @@ class KanakRepository(private val context: Context) {
     // Retrofit client for the Apps Script Web App Gateway
     private val apiService: KanakApiService by lazy {
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (com.example.BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
         }
         val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -59,6 +61,22 @@ class KanakRepository(private val context: Context) {
             .addConverterFactory(MoshiConverterFactory.create())
             .build()
             .create(KanakApiService::class.java)
+    }
+
+    private val backendApiService: KanakBackendApiService by lazy {
+        val endpoint = com.example.BuildConfig.KANAK_API_BASE_URL.trim()
+        require(endpoint.startsWith("https://")) {
+            "KANAK_API_BASE_URL must identify the permanent HTTPS backend"
+        }
+        Retrofit.Builder()
+            .baseUrl(endpoint.trimEnd('/') + "/")
+            .client(OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .build())
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+            .create(KanakBackendApiService::class.java)
     }
 
     // Reactive StateFlows for All 8 Entities
@@ -2449,11 +2467,24 @@ class KanakRepository(private val context: Context) {
         initialStaffName: String
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            // A local profile/Google Sheet never grants company ownership.
+            val token = currentAuthToken?.takeIf { it.isNotBlank() }
+                ?: error("Verified Firebase session required for company registration")
+            val registration = backendApiService.registerCompany(
+                "Bearer $token",
+                RegisterCompanyRequest(companyName.trim(), crNumber.trim(), vatNumber.trim(),
+                    phone.trim(), address.trim())
+            )
+            if (!registration.isSuccessful) error("Company registration rejected: HTTP ${registration.code()}")
+            val owner = registration.body() ?: error("Company registration returned no membership")
+            check(owner.email.equals(userEmail, ignoreCase = true) && owner.role == "COMPANY_ADMIN") {
+                "Server membership did not match the verified owner"
+            }
             setBusinessName(companyName)
             setBusinessAddress(address)
             if (vatNumber.isNotBlank()) setVatNumber(vatNumber)
 
-            val newBizId = "biz_${UUID.randomUUID().toString().take(8)}"
+            val newBizId = owner.tenantId
             val newBusiness = Business(
                 businessId = newBizId,
                 name = companyName,
