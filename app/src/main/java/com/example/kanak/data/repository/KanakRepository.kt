@@ -1626,7 +1626,7 @@ class KanakRepository(private val context: Context) {
         try {
             _isSyncing.value = true
             _lastSyncError.value = null
-            val token = currentAuthToken ?: "device_bearer_token"
+            val token = requireNotNull(currentAuthToken?.takeIf { it.isNotBlank() }) { "Sign in before using Google Sheets Gateway" }
             val req = GatewayRequest(action = "get_all", idToken = token, payload = emptyMap())
             val resp = apiService.executeGatewayAction(gatewayUrl, req)
             if (!resp.isSuccessful) {
@@ -1772,11 +1772,11 @@ class KanakRepository(private val context: Context) {
         scope.launch {
             try {
                 _isSyncing.value = true
-                val token = currentAuthToken ?: "device_bearer_token"
+                val token = requireNotNull(currentAuthToken?.takeIf { it.isNotBlank() }) { "Sign in before using Google Sheets Gateway" }
                 val req = GatewayRequest(action = action, idToken = token, payload = payload)
                 val resp = apiService.executeGatewayAction(gatewayUrl, req)
-                if (!resp.isSuccessful) {
-                    _lastSyncError.value = "Gateway HTTP ${resp.code()}"
+                if (!resp.isSuccessful || resp.body()?.success != true) {
+                    _lastSyncError.value = resp.body()?.error ?: "Gateway HTTP ${resp.code()}"
                 }
             } catch (e: Exception) {
                 _lastSyncError.value = "Sync error: ${e.message}"
@@ -1799,13 +1799,13 @@ class KanakRepository(private val context: Context) {
 
         try {
             val pendingSalesResult = firebaseManager.getCompletedSalesForSheetsSync()
-            val salesToPush = pendingSalesResult.getOrElse { emptyList() }
+            val salesToPush = pendingSalesResult.getOrThrow()
             if (salesToPush.isEmpty()) {
                 return Result.success(0)
             }
 
             var pushedCount = 0
-            val token = currentAuthToken ?: "device_bearer_token"
+            val token = requireNotNull(currentAuthToken?.takeIf { it.isNotBlank() }) { "Sign in before using Google Sheets Gateway" }
 
             for (invoice in salesToPush) {
                 val payload = mapOf(
@@ -1898,7 +1898,7 @@ class KanakRepository(private val context: Context) {
         return try {
             val pending = roomDb.syncQueueDao().getPendingItems()
             var count = 0
-            val token = currentAuthToken ?: "device_bearer_token"
+            val token = requireNotNull(currentAuthToken?.takeIf { it.isNotBlank() }) { "Sign in before using Google Sheets Gateway" }
             for (item in pending) {
                 try {
                     @Suppress("UNCHECKED_CAST")

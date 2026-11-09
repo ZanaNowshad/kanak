@@ -58,38 +58,41 @@ class GoogleSheetsSyncManager(
         authToken: String,
         spreadsheetId: String
     ): Result<Int> = withContext(Dispatchers.IO) {
+        if (authToken.isBlank() || spreadsheetId.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("Google Sheets OAuth and a real spreadsheet ID are required"))
+        }
         _syncState.value = SyncState.Syncing
         val authHeader = if (authToken.startsWith("Bearer ")) authToken else "Bearer $authToken"
         var processedCount = 0
 
         try {
             // 1. Products Sync
-            val pullProd = pullProductsFromSheets(authHeader, spreadsheetId).getOrDefault(0)
-            val pushProd = pushProductsToSheets(authHeader, spreadsheetId).getOrDefault(0)
+            val pullProd = pullProductsFromSheets(authHeader, spreadsheetId).getOrThrow()
+            val pushProd = pushProductsToSheets(authHeader, spreadsheetId).getOrThrow()
             processedCount += pullProd + pushProd
 
             // 2. Customers Sync
-            val pullCust = pullCustomersFromSheets(authHeader, spreadsheetId).getOrDefault(0)
-            val pushCust = pushCustomersToSheets(authHeader, spreadsheetId).getOrDefault(0)
+            val pullCust = pullCustomersFromSheets(authHeader, spreadsheetId).getOrThrow()
+            val pushCust = pushCustomersToSheets(authHeader, spreadsheetId).getOrThrow()
             processedCount += pullCust + pushCust
 
             // 3. Suppliers Sync
-            val pullSup = pullSuppliersFromSheets(authHeader, spreadsheetId).getOrDefault(0)
-            val pushSup = pushSuppliersToSheets(authHeader, spreadsheetId).getOrDefault(0)
+            val pullSup = pullSuppliersFromSheets(authHeader, spreadsheetId).getOrThrow()
+            val pushSup = pushSuppliersToSheets(authHeader, spreadsheetId).getOrThrow()
             processedCount += pullSup + pushSup
 
             // 4. Daily Sales Logs Push
-            val pushSales = pushDailySalesLogsToSheets(authHeader, spreadsheetId).getOrDefault(0)
+            val pushSales = pushDailySalesLogsToSheets(authHeader, spreadsheetId).getOrThrow()
             processedCount += pushSales
 
             // 5. Vans Sync
-            val pullVans = pullVansFromSheets(authHeader, spreadsheetId).getOrDefault(0)
-            val pushVans = pushVansToSheets(authHeader, spreadsheetId).getOrDefault(0)
+            val pullVans = pullVansFromSheets(authHeader, spreadsheetId).getOrThrow()
+            val pushVans = pushVansToSheets(authHeader, spreadsheetId).getOrThrow()
             processedCount += pullVans + pushVans
 
             // 6. Staff Sync
-            val pullStaff = pullStaffFromSheets(authHeader, spreadsheetId).getOrDefault(0)
-            val pushStaff = pushStaffToSheets(authHeader, spreadsheetId).getOrDefault(0)
+            val pullStaff = pullStaffFromSheets(authHeader, spreadsheetId).getOrThrow()
+            val pushStaff = pushStaffToSheets(authHeader, spreadsheetId).getOrThrow()
             processedCount += pullStaff + pushStaff
 
             val summaryMsg = "Bi-directional sync completed ($processedCount records synchronized across Products, Customers, Suppliers, Vans, Staff & Sales)"
@@ -417,10 +420,10 @@ class GoogleSheetsSyncManager(
 
             // 2. Also flush pending items from Room sync queue and Firestore backup
             val pushResult = repository.pushFirestoreSalesToGoogleSheets()
-            totalPushed += pushResult.getOrDefault(0)
+            totalPushed += pushResult.getOrThrow()
 
             val queueResult = repository.flushPendingRoomSyncQueue()
-            totalPushed += queueResult.getOrDefault(0)
+            totalPushed += queueResult.getOrThrow()
 
             Result.success(totalPushed)
         } catch (e: Exception) {

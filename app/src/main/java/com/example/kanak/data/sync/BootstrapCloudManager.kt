@@ -76,34 +76,34 @@ class BootstrapCloudManager(
      */
     suspend fun checkCloudBootstrapStatus(authToken: String) = withContext(Dispatchers.IO) {
         _bootstrapStatus.value = BootstrapStatus.Checking
-        val existingSheetId = repository.getGoogleSheetId()
-        val isCompleted = prefs.getBoolean("bootstrap_completed", false)
-
-        if (existingSheetId.isNullOrBlank() || !isCompleted) {
-            Log.i(TAG, "Master Google Sheet missing or unbootstrapped. Prompting user...")
+        val sheetId = repository.getGoogleSheetId()
+        if (sheetId.isNullOrBlank() || !prefs.getBoolean("bootstrap_completed", false)) {
             _bootstrapStatus.value = BootstrapStatus.PromptRequired
             return@withContext
         }
-
+        if (authToken.isBlank()) {
+            _bootstrapStatus.value = BootstrapStatus.Error("Authorize Google Sheets before verification")
+            return@withContext
+        }
         try {
             val authHeader = if (authToken.startsWith("Bearer ")) authToken else "Bearer $authToken"
-            val resp = syncManager.sheetsApiService.getSpreadsheet(authHeader, existingSheetId)
-            if (resp.isSuccessful && resp.body() != null) {
-                val sheetTitles = resp.body()?.sheets?.map { it.properties.title } ?: emptyList()
-                val missingSheets = MASTER_SCHEMA_TITLES.filter { !sheetTitles.contains(it) }
-                if (missingSheets.isNotEmpty()) {
-                    Log.w(TAG, "Missing required sheets: $missingSheets. Prompting user for bootstrap...")
-                    _bootstrapStatus.value = BootstrapStatus.PromptRequired
-                    return@withContext
-                }
+            val response = syncManager.sheetsApiService.getSpreadsheet(authHeader, sheetId)
+            if (!response.isSuccessful || response.body() == null) {
+                _bootstrapStatus.value = BootstrapStatus.Error("Google Sheets verification failed: HTTP ${response.code()}")
+                return@withContext
             }
-            _bootstrapStatus.value = BootstrapStatus.Completed(existingSheetId, "Master company workbook verified and ready.")
+            val titles = response.body()?.sheets?.map { it.properties.title } ?: emptyList()
+            val missing = MASTER_SCHEMA_TITLES.filterNot { it in titles }
+            if (missing.isNotEmpty()) {
+                _bootstrapStatus.value = BootstrapStatus.Error("Workbook missing sheets: ${missing.joinToString()}")
+            } else {
+                _bootstrapStatus.value = BootstrapStatus.Completed(sheetId, "Google Sheet verified")
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "Spreadsheet check fallback: ${e.message}")
-            _bootstrapStatus.value = BootstrapStatus.Completed(existingSheetId, "Master workbook connected.")
+            Log.e(TAG, "Google Sheet verification failed", e)
+            _bootstrapStatus.value = BootstrapStatus.Error(e.message ?: "Unable to verify workbook")
         }
     }
-
     /**
      * Prompts execution to automatically create the master spreadsheet template from the predefined JSON schema.
      */
@@ -193,7 +193,12 @@ class BootstrapCloudManager(
                 Log.i(TAG, successMsg)
 
                 // Trigger initial bi-directional sync
-                syncManager.performBiDirectionalSync(authToken, newSheetId)
+                val initialSync = syncManager.performBiDirectionalSync(authToken, newSheetId)
+                if (initialSync.isFailure) {
+                    val reason = initialSync.exceptionOrNull()?.message ?: "Initial sync failed"
+                    _bootstrapStatus.value = BootstrapStatus.Error(reason)
+                    return@withContext Result.failure(IllegalStateException(reason))
+                }
 
                 Result.success(newSheetId)
             } else {
