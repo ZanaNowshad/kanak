@@ -65,7 +65,7 @@ def retail_client():
         engine.dispose()
 
 
-@pytest.mark.xfail(strict=True, reason="P0: negative van transfer is accepted and corrupts stock")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="P0: negative van transfer is accepted and corrupts stock")
 def test_negative_van_load_must_be_rejected(retail_client):
     client, db = retail_client
     resp = client.post("/api/v1/fleet/vans/transfer", json={
@@ -76,7 +76,7 @@ def test_negative_van_load_must_be_rejected(retail_client):
     assert resp.status_code in (400, 422), resp.text
 
 
-@pytest.mark.xfail(strict=True, reason="P0: negative warehouse stock adjustment is accepted")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="P0: negative warehouse stock adjustment is accepted")
 def test_negative_stock_adjustment_must_be_rejected(retail_client):
     client, db = retail_client
     resp = client.post("/api/v1/inventory/adjust", json={
@@ -87,7 +87,7 @@ def test_negative_stock_adjustment_must_be_rejected(retail_client):
     assert resp.status_code in (400, 422), resp.text
 
 
-@pytest.mark.xfail(strict=True, reason="P1: van representative may post sales against another van")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="P1: van representative may post sales against another van")
 def test_salesperson_cannot_sell_from_unassigned_van(retail_client):
     client, db = retail_client
     resp = client.post("/api/v1/invoices", json={
