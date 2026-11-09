@@ -6,7 +6,6 @@ from backend.app.routers.customers import router as customers_router
 from backend.app.routers.suppliers import router as suppliers_router
 from backend.app.routers.inventory import router as inventory_router
 from backend.app.routers.sync import router as sync_router
-from backend.app.routers.admin import router as admin_router
 
 __all__ = [
     "auth_router",
@@ -16,6 +15,5 @@ __all__ = [
     "customers_router",
     "suppliers_router",
     "inventory_router",
-    "sync_router",
-    "admin_router"
+    "sync_router"
 ]

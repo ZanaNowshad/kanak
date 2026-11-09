@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     # Firebase Admin Configuration
     FIREBASE_PROJECT_ID: str = os.getenv("FIREBASE_PROJECT_ID", "kanak-fmcg-bh")
+    CORS_ALLOW_ORIGINS: str = os.getenv("CORS_ALLOW_ORIGINS", "")
     FIREBASE_CREDENTIALS_JSON: str = os.getenv("FIREBASE_CREDENTIALS_JSON", "")
 
     # Master Platform Administrator

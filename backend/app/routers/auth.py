@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from backend.app.database import get_db
 from backend.app.models.entities import User, Tenant
-from backend.app.config import settings
+from backend.app.security import verify_firebase_identity
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -26,53 +26,21 @@ class UserAuthResponse(BaseModel):
 
 @router.post("/verify", response_model=UserAuthResponse)
 def verify_user_and_tenant(req: TokenVerifyRequest, db: Session = Depends(get_db)):
+    """Resolve an already-provisioned membership from a verified Firebase identity.
+
+    The endpoint deliberately does NOT auto-join a tenant, grant admin privileges by
+    email, or manufacture companies and tax registration numbers.
     """
-    Verifies user authentication.
-    If the email is the Master Admin (zanabalmuhamed@gmail.com), elevates to SUPER_ADMIN.
-    Resolves tenant configuration and assigned van.
-    """
-    email = req.email.strip().lower() if req.email else ""
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Valid email required for user resolution"
-        )
-
-    # Check for existing user in database
-    user = db.query(User).filter(User.email == email).first()
-
-    if not user:
-        # Check if master platform admin
-        is_master = (email == settings.MASTER_ADMIN_EMAIL.lower())
-        
-        # Look for default or first active tenant
-        tenant = db.query(Tenant).filter(Tenant.is_active == True).first()
-        if not tenant:
-            tenant = Tenant(
-                company_name="KANAK FMCG Wholesale Bahrain",
-                cr_number="123456-1",
-                trn_number="200000000000002", # 15-digit Bahrain TRN
-                phone="+973 1700 0000",
-                address="Manama, Kingdom of Bahrain",
-                is_active=True
-            )
-            db.add(tenant)
-            db.commit()
-            db.refresh(tenant)
-
-        # Create user record
-        user = User(
-            tenant_id=tenant.id,
-            email=email,
-            full_name=req.display_name or email.split("@")[0].title(),
-            role="SUPER_ADMIN" if is_master else "VAN_REP",
-            is_active=True
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-    tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id).first()
+    claims = verify_firebase_identity(req.id_token)
+    email = claims["email"].strip().lower()
+    if req.email and req.email.strip().lower() != email:
+        raise HTTPException(status_code=403, detail="Requested email differs from verified identity")
+    user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
+    if user is None:
+        raise HTTPException(status_code=403, detail="An administrator must approve company membership")
+    tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id, Tenant.is_active.is_(True)).first()
+    if tenant is None:
+        raise HTTPException(status_code=403, detail="Company membership is inactive")
 
     return UserAuthResponse(
         user_id=user.id,
@@ -80,8 +48,8 @@ def verify_user_and_tenant(req: TokenVerifyRequest, db: Session = Depends(get_db
         full_name=user.full_name,
         role=user.role,
         tenant_id=user.tenant_id,
-        company_name=tenant.company_name if tenant else "KANAK FMCG",
-        cr_number=tenant.cr_number if tenant else None,
-        trn_number=tenant.trn_number if tenant else None,
-        assigned_van_id=user.assigned_van_id
+        company_name=tenant.company_name,
+        cr_number=tenant.cr_number,
+        trn_number=tenant.trn_number,
+        assigned_van_id=user.assigned_van_id,
     )

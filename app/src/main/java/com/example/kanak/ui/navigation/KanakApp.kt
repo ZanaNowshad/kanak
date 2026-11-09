@@ -23,7 +23,6 @@ import com.example.kanak.auth.AuthState
 import com.example.kanak.auth.GoogleAuthManager
 import com.example.kanak.data.repository.KanakRepository
 import com.example.kanak.domain.models.User
-import com.example.kanak.licensing.*
 import com.example.kanak.printing.BluetoothPrinterManager
 import com.example.kanak.ui.auth.AuthScreen
 import com.example.kanak.ui.auth.JoinBusinessScreen
@@ -61,7 +60,6 @@ sealed class Screen {
     object Purchases : Screen()
     object Suppliers : Screen()
     object Settings : Screen()
-    object AdminLicensePortal : Screen()
     object DailySalesSummary : Screen()
     object FleetManagement : Screen()
     object TeamManagement : Screen()
@@ -80,139 +78,61 @@ fun KanakApp(
 ) {
     val authState by authManager.authState.collectAsState()
     val context = LocalContext.current
-    val licenseManager = remember { LicenseManager(context) }
-    val licenseState by licenseManager.licenseState.collectAsState()
-    var reEditingRegistration by remember { mutableStateOf(false) }
     var showingJoinBusiness by remember { mutableStateOf(false) }
     var showStartupSplash by remember { mutableStateOf(true) }
-
-    AnimatedContent(
-        targetState = showStartupSplash,
-        transitionSpec = {
-            fadeIn(animationSpec = tween(450)) togetherWith fadeOut(animationSpec = tween(450))
-        },
-        label = "StartupSplashTransition"
-    ) { isSplash ->
-        if (isSplash) {
-            com.example.kanak.ui.components.KanakStartupLoader(
-                onStartupComplete = { showStartupSplash = false },
-                modifier = modifier
-            )
-        } else {
-            when (val state = authState) {
+    if (showStartupSplash) {
+        com.example.kanak.ui.components.KanakStartupLoader(
+            onStartupComplete = { showStartupSplash = false }, modifier = modifier)
+        return
+    }
+    when (val state = authState) {
         is AuthState.Authenticated -> {
-            val teamMemberships by repository.teamMemberships.collectAsState()
-            val effectiveUser = remember(state.user, teamMemberships) {
+            val memberships by repository.teamMemberships.collectAsState()
+            val currentUser = remember(state.user, memberships) {
                 repository.resolveUserWithMembership(state.user)
             }
-
-            val isMasterAdmin = remember(effectiveUser) {
-                licenseManager.isMasterAdmin(effectiveUser.email)
+            val syncManager = remember(repository) {
+                com.example.kanak.data.sync.GoogleSheetsSyncManager(context, repository)
             }
-
-            val syncManager = remember { com.example.kanak.data.sync.GoogleSheetsSyncManager(context, repository) }
-            val bootstrapCloudManager = remember { com.example.kanak.data.sync.BootstrapCloudManager(context, repository, syncManager) }
-            val bootstrapStatus by bootstrapCloudManager.bootstrapStatus.collectAsState()
-            val coroutineScope = rememberCoroutineScope()
-            var isVerifyingRegistration by remember(state.user.email) {
-                mutableStateOf(!isMasterAdmin && licenseState != LicenseState.ACTIVATED)
+            val bootstrap = remember(repository) {
+                com.example.kanak.data.sync.BootstrapCloudManager(context, repository, syncManager)
             }
-
-            LaunchedEffect(state.idToken, effectiveUser.email) {
+            LaunchedEffect(state.idToken, currentUser) {
                 repository.currentAuthToken = state.idToken
-                if (!isMasterAdmin && licenseState != LicenseState.ACTIVATED) {
-                    try {
-                        licenseManager.syncUserRegistration(effectiveUser.email, effectiveUser.businessName)
-                    } catch (_: Exception) {}
-                    isVerifyingRegistration = false
-                } else {
-                    isVerifyingRegistration = false
-                }
                 try {
-                    com.example.kanak.data.firebase.KanakFirebaseManager(context).syncUserToFirestore(effectiveUser)
-                } catch (_: Exception) {
-                }
-                bootstrapCloudManager.checkCloudBootstrapStatus(state.idToken)
+                    com.example.kanak.data.firebase.KanakFirebaseManager(context).syncUserToFirestore(currentUser)
+                } catch (_: Exception) {}
             }
-
-            val currentCompanyName = remember(effectiveUser, licenseState) {
-                if (effectiveUser.businessName.isNotBlank() && !effectiveUser.businessName.contains("W.L.L.", ignoreCase = true)) {
-                    effectiveUser.businessName
-                } else {
-                    repository.getBusinessName()
-                }
-            }
-
-            com.example.kanak.ui.components.BootstrapCloudDialog(
-                status = bootstrapStatus,
-                companyName = currentCompanyName,
-                onGrantPermissionAndCreate = {
-                    coroutineScope.launch {
-                        bootstrapCloudManager.executeBootstrapCreation(state.idToken, currentCompanyName)
-                    }
-                },
-                onDismiss = {
-                    bootstrapCloudManager.dismissPrompt()
-                }
-            )
-
-            if (isVerifyingRegistration) {
-                com.example.kanak.ui.components.KanakBrandLoadingOverlay(
-                    message = "Verifying Enterprise Registration...",
-                    subMessage = "Authoritative Account Check for ${effectiveUser.email}"
-                )
-            } else if (showingJoinBusiness) {
-                JoinBusinessScreen(
+            when {
+                showingJoinBusiness -> JoinBusinessScreen(
                     repository = repository,
-                    currentUser = effectiveUser,
-                    licenseManager = licenseManager,
-                    onJoinedSuccess = {
-                        showingJoinBusiness = false
-                        reEditingRegistration = false
-                    },
-                    onRegisterNewCompany = {
-                        showingJoinBusiness = false
-                    },
+                    currentUser = currentUser,
+                    onJoinedSuccess = { showingJoinBusiness = false },
+                    onRegisterNewCompany = { showingJoinBusiness = false },
                     modifier = modifier
                 )
-            } else if (!isMasterAdmin && !repository.isBusinessSetupCompleted(effectiveUser.email)) {
-                com.example.kanak.ui.wizard.BusinessSetupWizardScreen(
-                    repository = repository,
-                    currentUser = effectiveUser,
-                    bootstrapCloudManager = bootstrapCloudManager,
-                    licenseManager = licenseManager,
-                    onSetupComplete = {
-                        reEditingRegistration = false
-                    },
-                    onSignOut = {
-                        authManager.signOut()
-                    },
-                    onNavigateToJoin = {
-                        showingJoinBusiness = true
-                    },
-                    modifier = modifier
-                )
-            } else {
-                AuthenticatedApp(
+                !repository.isBusinessSetupCompleted(currentUser.email) ->
+                    com.example.kanak.ui.wizard.BusinessSetupWizardScreen(
+                        repository = repository,
+                        authManager = authManager,
+                        currentUser = currentUser,
+                        bootstrapCloudManager = bootstrap,
+                        onSetupComplete = {},
+                        onSignOut = { authManager.signOut() },
+                        onNavigateToJoin = { showingJoinBusiness = true },
+                        modifier = modifier
+                    )
+                else -> AuthenticatedApp(
                     repository = repository,
                     authManager = authManager,
                     printerManager = printerManager,
-                    licenseManager = licenseManager,
-                    currentUser = effectiveUser,
+                    currentUser = currentUser,
                     modifier = modifier
                 )
             }
         }
-        else -> {
-            AuthScreen(
-                authManager = authManager,
-                licenseManager = licenseManager,
-                modifier = modifier
-            )
-        }
+        else -> AuthScreen(authManager = authManager, modifier = modifier)
     }
-}
-}
 }
 
 @Composable
@@ -220,14 +140,9 @@ private fun AuthenticatedApp(
     repository: KanakRepository,
     authManager: GoogleAuthManager,
     printerManager: BluetoothPrinterManager,
-    licenseManager: LicenseManager,
     currentUser: User,
     modifier: Modifier = Modifier
 ) {
-    val isMasterAdmin = remember(currentUser) {
-        licenseManager.isMasterAdmin(currentUser.email)
-    }
-
     val visibleTabs = PrimaryTab.values()
 
     var selectedTab by remember { mutableStateOf(PrimaryTab.HOME) }
@@ -304,16 +219,13 @@ private fun AuthenticatedApp(
                             DashboardScreen(
                                 repository = repository,
                                 currentUser = currentUser,
-                                isMasterAdmin = isMasterAdmin,
                                 onNavigateToNewInvoice = { currentScreen = Screen.InvoiceComposer },
-                                onNavigateToExpressSales = { currentScreen = Screen.InvoiceComposer },
                                 onNavigateToSettings = { currentScreen = Screen.Settings },
                                 onNavigateToDailySalesSummary = { currentScreen = Screen.DailySalesSummary },
                                 onNavigateToFleet = { currentScreen = Screen.FleetManagement },
                                 onNavigateToTeam = { currentScreen = Screen.TeamManagement },
                                 onNavigateToProducts = { selectedTab = PrimaryTab.PRODUCTS },
                                 onNavigateToCustomers = { currentScreen = Screen.Customers },
-                                onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
                                 modifier = Modifier.padding(innerPadding)
                             )
                         }
@@ -344,7 +256,6 @@ private fun AuthenticatedApp(
                         PrimaryTab.MORE -> {
                             MoreHubScreen(
                                 currentUser = currentUser,
-                                isMasterAdmin = isMasterAdmin,
                                 onNavigateToCustomers = { currentScreen = Screen.Customers },
                                 onNavigateToStock = { currentScreen = Screen.Stock },
                                 onNavigateToPurchases = { currentScreen = Screen.Purchases },
@@ -353,7 +264,6 @@ private fun AuthenticatedApp(
                                 onNavigateToReports = { selectedTab = PrimaryTab.REPORTS },
                                 onNavigateToTeam = { currentScreen = Screen.TeamManagement },
                                 onNavigateToSettings = { currentScreen = Screen.Settings },
-                                onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
                                 onSignOut = { authManager.signOut() },
                                 modifier = Modifier.padding(innerPadding)
                             )
@@ -429,8 +339,6 @@ private fun AuthenticatedApp(
                 authManager = authManager,
                 printerManager = printerManager,
                 currentUser = currentUser,
-                licenseManager = licenseManager,
-                onNavigateToAdminLicensePortal = { currentScreen = Screen.AdminLicensePortal },
                 onNavigateToFleet = { currentScreen = Screen.FleetManagement },
                 onNavigateToTeam = { currentScreen = Screen.TeamManagement },
                 onNavigateToDailySummary = { currentScreen = Screen.DailySalesSummary },
@@ -444,14 +352,6 @@ private fun AuthenticatedApp(
             BackHandler { currentScreen = Screen.Settings }
             com.example.kanak.ui.settings.SystemDiagnosticsScreen(
                 repository = repository,
-                onNavigateBack = { currentScreen = Screen.Settings }
-            )
-        }
-
-        is Screen.AdminLicensePortal -> {
-            BackHandler { currentScreen = Screen.Settings }
-            AdminLicensePortalScreen(
-                licenseManager = licenseManager,
                 onNavigateBack = { currentScreen = Screen.Settings }
             )
         }
@@ -489,7 +389,6 @@ private fun AuthenticatedApp(
             JoinBusinessScreen(
                 repository = repository,
                 currentUser = currentUser,
-                licenseManager = licenseManager,
                 onJoinedSuccess = { currentScreen = Screen.TabView },
                 onRegisterNewCompany = { currentScreen = Screen.TabView }
             )

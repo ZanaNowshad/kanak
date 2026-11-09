@@ -39,6 +39,7 @@ import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.images.BingThumbnailUrlBuilder
 import com.example.kanak.ui.components.KanakConfirmDialog
 import com.example.kanak.ui.components.KanakTopBar
+import com.example.kanak.ui.components.CameraBarcodeScannerDialog
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
@@ -79,6 +80,7 @@ fun AddEditProductScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showCameraScanner by remember { mutableStateOf(false) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -408,7 +410,7 @@ fun AddEditProductScreen(
                         Icon(Icons.Outlined.QrCode, contentDescription = null, tint = KanakSecondaryText)
                     },
                     trailingIcon = {
-                        IconButton(onClick = {}) {
+                        IconButton(onClick = { showCameraScanner = true }) {
                             Icon(Icons.Outlined.QrCodeScanner, contentDescription = "Scan", tint = KanakPrimaryBlue)
                         }
                     },
@@ -715,6 +717,13 @@ fun AddEditProductScreen(
                 }
             }
         }
+    }
+
+    if (showCameraScanner) {
+        CameraBarcodeScannerDialog(
+            onScanned = { barcode = it; showCameraScanner = false },
+            onDismiss = { showCameraScanner = false }
+        )
     }
 
     // Paste URL Dialog

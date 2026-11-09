@@ -26,25 +26,20 @@ android {
   // and updating Android apps in AI Studio.
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      val ksFile = file(keystorePath)
-      if (ksFile.exists() && System.getenv("STORE_PASSWORD") != null) {
+      // Production signing is configured only from CI secrets; never reuse the debug key.
+      val ksPath = System.getenv("KEYSTORE_PATH")
+      val storeSecret = System.getenv("STORE_PASSWORD")
+      val keyName = System.getenv("KEY_ALIAS")
+      val keySecret = System.getenv("KEY_PASSWORD")
+      if (!ksPath.isNullOrBlank() && !storeSecret.isNullOrBlank() &&
+          !keyName.isNullOrBlank() && !keySecret.isNullOrBlank()) {
+        val ksFile = file(ksPath)
+        require(ksFile.isFile) { "Release signing keystore is not available" }
         storeFile = ksFile
-        storePassword = System.getenv("STORE_PASSWORD")
-        keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
-        keyPassword = System.getenv("KEY_PASSWORD") ?: System.getenv("STORE_PASSWORD")
-      } else {
-        storeFile = file("${rootDir}/debug.keystore")
-        storePassword = "android"
-        keyAlias = "androiddebugkey"
-        keyPassword = "android"
+        storePassword = storeSecret
+        keyAlias = keyName
+        keyPassword = keySecret
       }
-    }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
     }
   }
 
@@ -53,14 +48,10 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
-      signingConfig = signingConfigs.getByName("debugConfig")
+      // Android Gradle Plugin generates a separate debug signing certificate.
     }
   }
   compileOptions {
@@ -74,10 +65,7 @@ android {
   testOptions {
     unitTests {
       isIncludeAndroidResources = true
-      all {
-        it.systemProperty("robolectric.dependency.dir", "/home/appuser/.m2/repository/org/robolectric/android-all-instrumented/16-robolectric-13921718-i7")
-        it.systemProperty("robolectric.offline", "true")
-      }
+      // Robolectric downloads a compatible android-all SDK from Maven as needed.
     }
   }
   dependenciesInfo {
@@ -107,7 +95,6 @@ dependencies {
   implementation(libs.androidx.camera.lifecycle)
   implementation(libs.androidx.camera.view)
   implementation(libs.mlkit.barcode.scanning)
-  implementation(libs.play.services.code.scanner)
   implementation(libs.androidx.compose.material.icons.core)
   implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.compose.material3)

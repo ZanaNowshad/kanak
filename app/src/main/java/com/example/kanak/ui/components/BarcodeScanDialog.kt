@@ -50,25 +50,22 @@ fun BarcodeScanDialog(
     var manualBarcode by remember { mutableStateOf("") }
     var scanErrorMessage by remember { mutableStateOf<String?>(null) }
     var matchedProduct by remember { mutableStateOf<Product?>(null) }
+    var showCamera by remember { mutableStateOf(true) }
 
-    // Launch Google Code Scanner immediately on mount
-    LaunchedEffect(Unit) {
-        scannerManager.startScan(
-            onBarcodeScanned = { scannedCode ->
+    if (showCamera) {
+        CameraBarcodeScannerDialog(
+            onScanned = { scannedCode ->
+                showCamera = false
                 manualBarcode = scannedCode
                 val found = scannerManager.lookupProductByBarcode(products, scannedCode)
                 if (found != null) {
-                    matchedProduct = found
-                    val isDuplicate = existingProductIdsInInvoice.contains(found.productId)
-                    onProductSelected(found, isDuplicate)
+                    onProductSelected(found, existingProductIdsInInvoice.contains(found.productId))
                     onDismiss()
                 } else {
                     scanErrorMessage = "No product found with barcode: $scannedCode"
                 }
             },
-            onError = { err ->
-                scanErrorMessage = err
-            }
+            onDismiss = { showCamera = false }
         )
     }
 
@@ -148,26 +145,7 @@ fun BarcodeScanDialog(
 
                 // Camera Scanner Action Button
                 Button(
-                    onClick = {
-                        scanErrorMessage = null
-                        scannerManager.startScan(
-                            onBarcodeScanned = { scannedCode ->
-                                manualBarcode = scannedCode
-                                val found = scannerManager.lookupProductByBarcode(products, scannedCode)
-                                if (found != null) {
-                                    matchedProduct = found
-                                    val isDuplicate = existingProductIdsInInvoice.contains(found.productId)
-                                    onProductSelected(found, isDuplicate)
-                                    onDismiss()
-                                } else {
-                                    scanErrorMessage = "No product found with barcode: $scannedCode"
-                                }
-                            },
-                            onError = { err ->
-                                scanErrorMessage = err
-                            }
-                        )
-                    },
+                    onClick = { scanErrorMessage = null; showCamera = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)

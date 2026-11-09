@@ -14,7 +14,7 @@ import org.robolectric.annotation.Config
 import java.math.BigDecimal
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class KanakRepositoryRobolectricTest {
 
     private lateinit var context: Context
@@ -676,15 +676,15 @@ class KanakRepositoryRobolectricTest {
 
     @Test
     fun testResolveUserWithMembership() = runTest {
-        // Owner email
+        // An email address alone must never grant owner permissions.
         val ownerUser = com.example.kanak.domain.models.User(
-            userId = "owner_uid",
+            userId = "unassigned_uid",
             email = "zanabalmuhamed@gmail.com"
         )
         val resolvedOwner = repository.resolveUserWithMembership(ownerUser)
-        assertEquals(com.example.kanak.domain.models.User.ROLE_OWNER, resolvedOwner.role)
-        assertTrue(resolvedOwner.isOwner)
-        assertTrue(resolvedOwner.permissions.containsAll(com.example.kanak.domain.models.KanakPermissions.ALL_PERMISSIONS))
+        assertEquals(com.example.kanak.domain.models.User.ROLE_STANDARD, resolvedOwner.role)
+        assertFalse(resolvedOwner.isOwner)
+        assertFalse(resolvedOwner.permissions.containsAll(com.example.kanak.domain.models.KanakPermissions.ALL_PERMISSIONS))
 
         // Create a van first
         val van = repository.createVan(
@@ -725,12 +725,13 @@ class KanakRepositoryRobolectricTest {
     @Test
     fun testBusinessSetupCompletionGate() = runTest {
         val superAdmin = "zanabalmuhamed@gmail.com"
-        assertTrue("Super admin should always be considered setup-completed", repository.isBusinessSetupCompleted(superAdmin))
+        assertFalse("No account bypasses company setup without membership", repository.isBusinessSetupCompleted(superAdmin))
 
         val newUser = "newowner@fmcgdistribution.bh"
         assertFalse("New user with no registered business must fail the gate", repository.isBusinessSetupCompleted(newUser))
 
         val setupRes = repository.completeBusinessSetup(
+            userId = "google_uid_owner_001",
             userEmail = newUser,
             companyName = "Manama FMCG Distribution",
             businessType = "Wholesale FMCG",
@@ -749,13 +750,17 @@ class KanakRepositoryRobolectricTest {
         assertTrue("completeBusinessSetup must succeed", setupRes.isSuccess)
         assertTrue("After completing setup, user must pass the gate", repository.isBusinessSetupCompleted(newUser))
 
-        // Verify that business details and initial van/staff were persisted
+        // Verify that business details and initial van and owner were persisted
         assertEquals("Manama FMCG Distribution", repository.getBusinessName())
         assertEquals("Building 100, Road 20, Block 300, Manama", repository.getBusinessAddress())
         val vans = repository.vans.value
         assertTrue("Initial van must be present in repository", vans.any { it.vanCode == "VAN-01" })
         val staff = repository.teamMemberships.value
-        assertTrue("Initial staff must be present in repository", staff.any { it.displayName == "Hassan Al-Majid" })
+        assertTrue("Authenticated creator must receive admin membership", staff.any {
+            it.userId == "google_uid_owner_001" &&
+                it.email == newUser && it.role == com.example.kanak.domain.models.User.ROLE_ADMIN
+        })
+        assertFalse("Do not invent a staff member from a template name", staff.any { it.displayName == "Hassan Al-Majid" })
     }
 }
 

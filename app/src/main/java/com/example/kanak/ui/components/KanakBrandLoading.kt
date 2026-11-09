@@ -31,10 +31,10 @@ import com.example.R
 import com.example.ui.theme.*
 
 // Premium Enterprise Branding Palette
-private val BrandGold = Color(0xFFD4AF37)
-private val BrandGoldLight = Color(0xFFFFDF79)
-private val BrandNavyDark = Color(0xFF091422)
-private val BrandNavySurface = Color(0xFF0D1B2A)
+private val BrandGold = KanakPrimaryBlue
+private val BrandGoldLight = KanakPrimaryBlue
+private val BrandNavyDark = Color(0xFFF8FAFF)
+private val BrandNavySurface = KanakSurface
 private val BrandAccentCyan = Color(0xFF38BDF8)
 
 /**
@@ -192,7 +192,7 @@ fun KanakBrandLoadingOverlay(
                         )
                     ) {
                         Image(
-                            painter = painterResource(id = R.drawable.kanak_app_icon_1794073715264),
+                            painter = painterResource(id = R.drawable.ic_launcher_foreground),
                             contentDescription = "KANAK Brand Emblem",
                             modifier = Modifier
                                 .fillMaxSize()
@@ -243,7 +243,7 @@ fun KanakBrandLoadingOverlay(
                     text = "$message$animatedDots",
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontWeight = FontWeight.SemiBold,
-                        color = Color.White,
+                        color = KanakPrimaryText,
                         fontSize = 14.sp,
                         lineHeight = 20.sp
                     ),
@@ -332,7 +332,7 @@ fun KanakBrandInlineLoading(
                 color = BrandNavyDark
             ) {
                 Image(
-                    painter = painterResource(id = R.drawable.kanak_app_icon_1794073715264),
+                    painter = painterResource(id = R.drawable.ic_launcher_foreground),
                     contentDescription = null,
                     modifier = Modifier
                         .fillMaxSize()

@@ -36,7 +36,6 @@ import com.example.ui.theme.*
 @Composable
 fun MoreHubScreen(
     currentUser: User,
-    isMasterAdmin: Boolean,
     onNavigateToCustomers: () -> Unit,
     onNavigateToStock: () -> Unit,
     onNavigateToPurchases: () -> Unit,
@@ -45,7 +44,6 @@ fun MoreHubScreen(
     onNavigateToReports: () -> Unit,
     onNavigateToTeam: () -> Unit,
     onNavigateToSettings: () -> Unit,
-    onNavigateToAdminLicensePortal: () -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -279,17 +277,6 @@ fun MoreHubScreen(
                             testTag = "more_item_settings"
                         )
 
-                        if (isMasterAdmin) {
-                            HorizontalDivider(color = KanakBorder, thickness = 0.5.dp)
-                            HubMenuItem(
-                                icon = Icons.Outlined.AdminPanelSettings,
-                                iconTint = Color(0xFFD97706),
-                                title = stringResource(id = R.string.operator_license_portal),
-                                subtitle = stringResource(id = R.string.operator_desc),
-                                onClick = onNavigateToAdminLicensePortal,
-                                testTag = "more_item_admin_portal"
-                            )
-                        }
                     }
                 }
             }

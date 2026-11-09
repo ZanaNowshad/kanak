@@ -41,16 +41,13 @@ import java.util.*
 fun DashboardScreen(
     repository: KanakRepository,
     currentUser: User,
-    isMasterAdmin: Boolean = false,
     onNavigateToNewInvoice: () -> Unit,
-    onNavigateToExpressSales: () -> Unit = onNavigateToNewInvoice,
     onNavigateToSettings: () -> Unit,
     onNavigateToDailySalesSummary: () -> Unit,
     onNavigateToFleet: () -> Unit,
     onNavigateToTeam: () -> Unit,
     onNavigateToProducts: () -> Unit,
     onNavigateToCustomers: () -> Unit,
-    onNavigateToAdminLicensePortal: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val summary by repository.dashboardSummary.collectAsState()
@@ -58,8 +55,22 @@ fun DashboardScreen(
     val vans by repository.vans.collectAsState()
     val invoices by repository.invoices.collectAsState()
 
-    val isOwner = currentUser.isOwner || isMasterAdmin
+    val isOwner = currentUser.isOwner
     val isSalesperson = currentUser.isSalesperson && !isOwner
+    val syncState by repository.syncState.collectAsState()
+    val isOnline by repository.isOnline.collectAsState()
+    val pendingCount by repository.pendingSyncCount.collectAsState()
+    var showProfileMenu by remember { mutableStateOf(false) }
+    var showSyncStatus by remember { mutableStateOf(false) }
+    val assignedVan = vans.firstOrNull { it.vanId == currentUser.assignedVanId }
+    val syncColor = when {
+        !isOnline -> KanakError
+        syncState == KanakRepository.SyncState.CONFLICT -> KanakError
+        syncState == KanakRepository.SyncState.SYNCING -> KanakPrimaryBlue
+        pendingCount > 0 -> Color(0xFFD97706)
+        repository.getGoogleSheetId().isNullOrBlank() -> KanakSecondaryText
+        else -> KanakSuccess
+    }
 
     val todayDateFormatted = remember {
         val df = SimpleDateFormat("EEE, d MMM yyyy", Locale.US).apply {
@@ -118,51 +129,37 @@ fun DashboardScreen(
                     }
                 },
                 actions = {
-                    // Admin Portal Button for zanabalmuhamed@gmail.com
-                    if (isMasterAdmin) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFFFEF3C7),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B)),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onNavigateToAdminLicensePortal?.invoke() }
-                                .testTag("topbar_admin_portal_button")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                            ) {
-                                Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("PLATFORM ADMIN", style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF92400E), fontWeight = FontWeight.Bold, fontSize = 10.sp))
+                    IconButton(onClick = { showSyncStatus = true },
+                        modifier = Modifier.size(36.dp).testTag("dashboard_sync_status_button")) {
+                        Icon(Icons.Default.Circle, contentDescription = "Connection and sync status",
+                            tint = syncColor, modifier = Modifier.size(15.dp))
+                    }
+                    Box {
+                        Surface(shape = CircleShape, color = KanakAccentLight,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, KanakPrimaryBlue.copy(alpha = 0.4f)),
+                            modifier = Modifier.size(36.dp).clip(CircleShape)
+                                .clickable { showProfileMenu = true }
+                                .testTag("dashboard_profile_menu_button")) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(currentUser.initials, color = KanakPrimaryBlue,
+                                    style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                             }
                         }
-                        Spacer(modifier = Modifier.width(6.dp))
-                    }
-
-                    // Avatar button navigating to settings
-                    Surface(
-                        shape = CircleShape,
-                        color = if (isMasterAdmin) Color(0xFFFEF3C7) else KanakAccentLight,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isMasterAdmin) Color(0xFFF59E0B) else KanakPrimaryBlue.copy(alpha = 0.4f)),
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .clickable(onClick = onNavigateToSettings)
-                            .testTag("dashboard_settings_button")
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = currentUser.initials,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isMasterAdmin) Color(0xFF92400E) else KanakPrimaryBlue
-                                )
-                            )
+                        DropdownMenu(expanded = showProfileMenu,
+                            onDismissRequest = { showProfileMenu = false }) {
+                            DropdownMenuItem(text = { Text(if (assignedVan != null)
+                                "Assigned VAN: ${assignedVan.vanCode} - ${assignedVan.vanName}"
+                                else "Assigned VAN: None") },
+                                onClick = { showProfileMenu = false },
+                                leadingIcon = { Icon(Icons.Default.DirectionsBus, null) },
+                                modifier = Modifier.testTag("profile_assigned_van"))
+                            HorizontalDivider()
+                            DropdownMenuItem(text = { Text("Settings") },
+                                onClick = { showProfileMenu = false; onNavigateToSettings() },
+                                leadingIcon = { Icon(Icons.Default.Settings, null) })
                         }
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(Modifier.width(12.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = KanakBackground,
@@ -193,115 +190,6 @@ fun DashboardScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Master Admin Banner
-            if (isMasterAdmin) {
-                item {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable { onNavigateToAdminLicensePortal?.invoke() }
-                            .testTag("dashboard_master_admin_banner"),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Surface(shape = CircleShape, color = Color(0xFFD97706), modifier = Modifier.size(40.dp)) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("PLATFORM LICENSING CONTROL", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Black, color = Color(0xFF92400E), fontSize = 12.sp))
-                                Text("Manage company registrations & issue cryptographic activation keys", style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF78350F), fontSize = 11.sp))
-                            }
-                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color(0xFF92400E))
-                        }
-                    }
-                }
-            }
-
-            // Always-visible Live Connection and Synchronization Status Bar
-            item {
-                com.example.kanak.ui.components.SyncStatusBar(repository = repository)
-            }
-
-            // Salesperson Assigned Van Banner & Express Sales Hero
-            if (isSalesperson) {
-                item {
-                    val assignedVan = vans.find { it.vanId == currentUser.assignedVanId } ?: vans.firstOrNull()
-                    Card(
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = KanakAccentLight),
-                        border = androidx.compose.foundation.BorderStroke(1.5.dp, KanakPrimaryBlue.copy(alpha = 0.4f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Surface(shape = RoundedCornerShape(10.dp), color = KanakPrimaryBlue, modifier = Modifier.size(44.dp)) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (assignedVan != null) "Assigned Van: ${assignedVan.vanCode} • ${assignedVan.vanName}" else "No Van Assigned",
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryBlue)
-                                )
-                                Text(
-                                    text = "Operator: ${currentUser.displayName} • Active Route Shift",
-                                    style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Express Sales Mode Hero Action for Salesperson
-                item {
-                    Card(
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = KanakPrimaryBlue),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable(onClick = onNavigateToExpressSales)
-                            .testTag("express_sales_hero_card")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.2f), modifier = Modifier.size(44.dp)) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.FlashOn, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "START EXPRESS SALE",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black, color = Color.White, fontSize = 15.sp)
-                                )
-                                Text(
-                                    text = "Rapid workflow: Customer → Products → Keypad → Print",
-                                    style = MaterialTheme.typography.bodySmall.copy(color = Color.White.copy(alpha = 0.85f), fontSize = 11.sp)
-                                )
-                            }
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = Color.White)
-                        }
-                    }
-                }
-            }
-
             // Greeting & Session Date
             item {
                 Row(
@@ -440,56 +328,6 @@ fun DashboardScreen(
                 }
             }
 
-            // Quick Actions Hub Grid
-            item {
-                Text(
-                    text = "Quick Actions",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    QuickActionButton(
-                        title = "New Invoice",
-                        subtitle = "Issue Sale Invoice",
-                        icon = Icons.Default.AddShoppingCart,
-                        iconBg = KanakPrimaryBlue,
-                        onClick = onNavigateToNewInvoice,
-                        modifier = Modifier.weight(1f)
-                    )
-                    QuickActionButton(
-                        title = "Daily Summary",
-                        subtitle = "VAT & Sales",
-                        icon = Icons.Default.Assessment,
-                        iconBg = Color(0xFF16A34A),
-                        onClick = onNavigateToDailySalesSummary,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                if (isOwner) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        QuickActionButton(
-                            title = "Fleet & Vans",
-                            subtitle = "Transfers & Vans",
-                            icon = Icons.Default.DirectionsBus,
-                            iconBg = Color(0xFFD97706),
-                            onClick = onNavigateToFleet,
-                            modifier = Modifier.weight(1f)
-                        )
-                        QuickActionButton(
-                            title = "Team Members",
-                            subtitle = "Invites & Roles",
-                            icon = Icons.Default.GroupAdd,
-                            iconBg = Color(0xFF7C3AED),
-                            onClick = onNavigateToTeam,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-            }
-
             // Fleet Performance Section (Owner Dashboard - Section 8.1 of Spec)
             if (isOwner && summary.vanPerformances.isNotEmpty()) {
                 item {
@@ -591,38 +429,21 @@ fun DashboardScreen(
             }
         }
     }
-}
-
-@Composable
-private fun QuickActionButton(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    iconBg: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = KanakSurface),
-        border = CardDefaults.outlinedCardBorder(),
-        onClick = onClick,
-        modifier = modifier
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(shape = CircleShape, color = iconBg, modifier = Modifier.size(38.dp)) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
-                }
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-            Column {
-                Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText))
-                Text(subtitle, style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText, fontSize = 11.sp))
-            }
-        }
+    if (showSyncStatus) {
+        AlertDialog(
+            onDismissRequest = { showSyncStatus = false },
+            title = { Text("Connection and sync") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (isOnline) "Network connected" else "Offline")
+                Text("Sync state: ${syncState.name}")
+                Text("Pending records: $pendingCount")
+                if (repository.getGoogleSheetId().isNullOrBlank())
+                    Text("Google Sheets is not connected", color = KanakSecondaryText)
+                if (syncState == KanakRepository.SyncState.CONFLICT)
+                    Text("Sync conflict: check Settings", color = KanakError)
+            } },
+            confirmButton = { TextButton(onClick = { showSyncStatus = false }) { Text("Close") } }
+        )
     }
 }
+

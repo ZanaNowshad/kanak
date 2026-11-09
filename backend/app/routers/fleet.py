@@ -4,7 +4,8 @@ from typing import List
 from decimal import Decimal
 from pydantic import BaseModel
 from backend.app.database import get_db
-from backend.app.models.entities import Van, VanStockAllowance, Product, StockLedger
+from backend.app.models.entities import Van, VanStockAllowance, Product, StockLedger, User
+from backend.app.security import get_authenticated_user
 from backend.app.schemas.schemas import VanCreate, VanResponse, VanStockTransferRequest
 
 router = APIRouter(prefix="/fleet", tags=["Fleet & Vans"])
@@ -41,11 +42,17 @@ def create_van(req: VanCreate, db: Session = Depends(get_db)):
     return van
 
 @router.get("/vans/{van_id}/stock", response_model=List[VanStockAllowanceItem])
-def get_van_stock(van_id: str, db: Session = Depends(get_db)):
-    allowances = db.query(VanStockAllowance).filter(VanStockAllowance.van_id == van_id).all()
+def get_van_stock(van_id: str, db: Session = Depends(get_db),
+                  user: User = Depends(get_authenticated_user)):
+    van = db.query(Van).filter(Van.id == van_id, Van.tenant_id == user.tenant_id).first()
+    if van is None:
+        raise HTTPException(status_code=404, detail="Van not found")
+    allowances = db.query(VanStockAllowance).filter(VanStockAllowance.van_id == van_id,
+                                                    VanStockAllowance.tenant_id == user.tenant_id).all()
     results = []
     for a in allowances:
-        prod = db.query(Product).filter(Product.id == a.product_id).first()
+        prod = db.query(Product).filter(Product.id == a.product_id,
+                                        Product.tenant_id == user.tenant_id).first()
         if prod:
             results.append(VanStockAllowanceItem(
                 product_id=prod.id,

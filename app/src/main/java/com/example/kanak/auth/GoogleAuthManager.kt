@@ -1,6 +1,8 @@
 package com.example.kanak.auth
 
 import android.app.Activity
+import android.app.PendingIntent
+import android.content.Intent
 import android.content.Context
 import android.content.ContextWrapper
 import android.util.Log
@@ -26,6 +28,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
+class OAuthConsentRequired(val pendingIntent: PendingIntent) : Exception("Google Sheets permission required")
+
 sealed class AuthState {
     object Idle : AuthState()
     object Loading : AuthState()
@@ -45,6 +49,8 @@ class GoogleAuthManager(private val context: Context) {
     companion object {
         const val SCOPE_SPREADSHEETS = "https://www.googleapis.com/auth/spreadsheets"
         const val SCOPE_DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
+        private val sharedSheetsToken = MutableStateFlow<String?>(null)
+        fun activeGoogleSheetsAccessToken(): String? = sharedSheetsToken.value
         val REQUIRED_OAUTH_SCOPES = listOf(
             Scope(SCOPE_SPREADSHEETS),
             Scope(SCOPE_DRIVE_FILE)
@@ -67,18 +73,14 @@ class GoogleAuthManager(private val context: Context) {
     private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
-    private val _oauthSheetsToken = MutableStateFlow<String?>(prefs.getString("oauth_sheets_token", null))
+    private val _oauthSheetsToken = sharedSheetsToken
     val oauthSheetsToken: StateFlow<String?> = _oauthSheetsToken.asStateFlow()
 
-    fun getOAuthSheetsToken(): String? {
-        return _oauthSheetsToken.value
-            ?: prefs.getString("oauth_sheets_token", null)
-            ?: prefs.getString("id_token", null)
-    }
+    fun getOAuthSheetsToken(): String? = _oauthSheetsToken.value
 
     fun setOAuthSheetsToken(token: String) {
         _oauthSheetsToken.value = token
-        prefs.edit().putString("oauth_sheets_token", token).apply()
+        prefs.edit().remove("oauth_sheets_token").apply()
     }
 
     fun hasOAuthSheetsToken(): Boolean {
@@ -90,7 +92,7 @@ class GoogleAuthManager(private val context: Context) {
      * https://www.googleapis.com/auth/spreadsheets and https://www.googleapis.com/auth/drive.file
      * for full Google Sheets access.
      */
-    suspend fun requestGoogleSheetsOAuth(activityContext: Context? = null): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun requestGoogleSheetsOAuth(activityContext: Context? = null): Result<String> = withContext(Dispatchers.Main) {
         try {
             val resolvedActivity = (activityContext ?: context).findActivity() ?: activityContext ?: context
             val authorizationRequest = AuthorizationRequest.builder()
@@ -105,18 +107,23 @@ class GoogleAuthManager(private val context: Context) {
                 Log.i("GoogleAuthManager", "OAuth 2.0 access token acquired for Google Sheets & Drive")
                 Result.success(accessToken)
             } else if (result.hasResolution()) {
-                Log.i("GoogleAuthManager", "OAuth 2.0 requires user resolution, returning available session token")
-                val fallback = getOAuthSheetsToken() ?: "pending_oauth_consent"
-                Result.success(fallback)
+                Result.failure(OAuthConsentRequired(requireNotNull(result.pendingIntent)))
             } else {
-                val fallback = getOAuthSheetsToken() ?: "granted_device_oauth_token"
-                Result.success(fallback)
+                Result.failure(IllegalStateException("Google Sheets access token not granted"))
             }
         } catch (e: Exception) {
             Log.w("GoogleAuthManager", "OAuth 2.0 request exception: ${e.message}")
-            val fallback = getOAuthSheetsToken() ?: "granted_device_oauth_token"
-            Result.success(fallback)
+            Result.failure(e)
         }
+    }
+
+    fun completeGoogleSheetsOAuth(resultIntent: Intent?): Result<String> = runCatching {
+        val result = Identity.getAuthorizationClient(context)
+            .getAuthorizationResultFromIntent(requireNotNull(resultIntent))
+        val accessToken = result.accessToken?.takeIf { it.isNotBlank() }
+            ?: error("Google Sheets authorization was not granted")
+        setOAuthSheetsToken(accessToken)
+        accessToken
     }
 
     init {
@@ -128,27 +135,6 @@ class GoogleAuthManager(private val context: Context) {
      * Prevents security flaws where placeholder tokens allowed unauthenticated bypass.
      */
     private fun restoreSession() {
-        val isDemo = prefs.getBoolean("is_demo_session", false)
-        if (isDemo) {
-            val savedUserId = prefs.getString("user_id", null)
-            val savedEmail = prefs.getString("user_email", null)
-            val savedRole = prefs.getString("user_role", User.ROLE_STANDARD) ?: User.ROLE_STANDARD
-            val savedToken = prefs.getString("id_token", null)
-
-            if (savedUserId != null && savedEmail != null && savedToken != null) {
-                _authState.value = AuthState.Authenticated(
-                    user = User(
-                        userId = savedUserId,
-                        email = savedEmail,
-                        role = savedRole,
-                        active = true
-                    ),
-                    idToken = savedToken
-                )
-                return
-            }
-        }
-
         // Production check: Validate that Firebase Auth has an active current user
         val currentUser = FirebaseAuth.getInstance().currentUser
         if (currentUser == null) {
@@ -214,7 +200,7 @@ class GoogleAuthManager(private val context: Context) {
             val credential = result.credential
             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
-                val email = googleIdTokenCredential.id
+                val credentialEmail = googleIdTokenCredential.id
                 val idToken = googleIdTokenCredential.idToken
 
                 // 1. Authenticate with Firebase Auth - FAIL CLOSED
@@ -236,6 +222,7 @@ class GoogleAuthManager(private val context: Context) {
                     return@withContext errorState
                 }
 
+                val email = firebaseUser.email?.trim()?.lowercase() ?: return@withContext AuthState.Error("Verified account email unavailable").also { _authState.value = it }
                 val realUserId = firebaseUser.uid
 
                 // 2. Query Firestore /users/{uid} for server-enforced role and active state
@@ -251,24 +238,10 @@ class GoogleAuthManager(private val context: Context) {
                         role = doc.getString("role") ?: User.ROLE_STANDARD
                         assignedVanId = doc.getString("assignedVanId")
                         assignedVanCode = doc.getString("assignedVanCode")
-                    } else {
-                        // First-time user profile creation:
-                        // Only designated admin emails receive owner/admin status; all others default to STANDARD
-                        if (email.trim().equals("zanabalmuhamed@gmail.com", ignoreCase = true) ||
-                            email.trim().equals("admin@kanak-fmcg.bh", ignoreCase = true)) {
-                            role = User.ROLE_OWNER
-                        } else {
-                            role = User.ROLE_STANDARD
-                        }
                     }
                 } catch (e: Exception) {
-                    Log.w("GoogleAuthManager", "Could not fetch user profile from Firestore: ${e.message}")
-                    // If network fails during role check, only permit master admin email as owner, others as standard
-                    if (email.trim().equals("zanabalmuhamed@gmail.com", ignoreCase = true)) {
-                        role = User.ROLE_OWNER
-                    } else {
-                        role = User.ROLE_STANDARD
-                    }
+                    Log.w("GoogleAuthManager", "Could not load Firestore role", e)
+                    // Keep the STANDARD role until an authenticated company setup is complete.
                 }
 
                 // Check active status
@@ -290,18 +263,11 @@ class GoogleAuthManager(private val context: Context) {
                 )
 
                 // Persist session locally and sync to cloud profile
-                persistSession(user, idToken, isDemo = false)
+                persistSession(user, idToken)
                 try {
                     firebaseManager.syncUserToFirestore(user)
                 } catch (e: Exception) {
                     Log.w("GoogleAuthManager", "Async cloud profile update: ${e.message}")
-                }
-
-                // Request OAuth 2.0 scopes for Google Sheets & Drive
-                try {
-                    requestGoogleSheetsOAuth(targetContext)
-                } catch (e: Exception) {
-                    Log.w("GoogleAuthManager", "Pre-authorization of Google Sheets OAuth: ${e.message}")
                 }
 
                 val state = AuthState.Authenticated(user, idToken)
@@ -328,27 +294,6 @@ class GoogleAuthManager(private val context: Context) {
         }
     }
 
-    /**
-     * Role-switchable demo account for testing van sales operations in isolated demo mode.
-     * Strictly restricted to Super Admin account if no registered business is linked.
-     */
-    fun signInAsDemo(asAdmin: Boolean = true): AuthState {
-        val email = if (asAdmin) "zanabalmuhamed@gmail.com" else "owner@newbusiness.bh"
-        val user = User(
-            userId = if (asAdmin) "usr_owner_session" else "usr_new_owner_${System.currentTimeMillis() % 10000}",
-            email = email,
-            role = User.ROLE_OWNER,
-            active = true,
-            assignedVanId = null,
-            assignedVanCode = null
-        )
-        val token = "demo_token_${user.userId}"
-        persistSession(user, token, isDemo = true)
-        val state = AuthState.Authenticated(user, token)
-        _authState.value = state
-        return state
-    }
-
     fun signOut() {
         try {
             FirebaseAuth.getInstance().signOut()
@@ -360,9 +305,8 @@ class GoogleAuthManager(private val context: Context) {
         _authState.value = AuthState.Idle
     }
 
-    private fun persistSession(user: User, token: String, isDemo: Boolean) {
+    private fun persistSession(user: User, token: String) {
         prefs.edit()
-            .putBoolean("is_demo_session", isDemo)
             .putString("user_id", user.userId)
             .putString("user_email", user.email)
             .putString("user_role", user.role)

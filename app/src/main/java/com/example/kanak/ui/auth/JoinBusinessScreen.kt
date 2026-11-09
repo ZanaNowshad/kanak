@@ -21,7 +21,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.kanak.data.repository.KanakRepository
 import com.example.kanak.domain.models.User
-import com.example.kanak.licensing.LicenseManager
 import com.example.kanak.ui.components.KanakBrandLoadingDialog
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
@@ -31,7 +30,6 @@ import kotlinx.coroutines.launch
 fun JoinBusinessScreen(
     repository: KanakRepository,
     currentUser: User,
-    licenseManager: LicenseManager,
     onJoinedSuccess: () -> Unit,
     onRegisterNewCompany: () -> Unit,
     modifier: Modifier = Modifier
@@ -167,7 +165,6 @@ fun JoinBusinessScreen(
                                 res.onSuccess {
                                     Toast.makeText(context, "Successfully joined ${it.businessName}!", Toast.LENGTH_LONG).show()
                                     // Mark licensing as activated via company membership
-                                    licenseManager.activateViaCompanyMembership(it.businessName)
                                     onJoinedSuccess()
                                 }.onFailure {
                                     errorMessage = it.message ?: "Invalid or expired invitation code"
