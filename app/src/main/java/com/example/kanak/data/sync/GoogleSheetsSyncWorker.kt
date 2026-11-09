@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import androidx.work.*
 import com.example.kanak.data.repository.KanakRepository
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
@@ -23,7 +25,11 @@ class GoogleSheetsSyncWorker(
         Log.i(TAG, "Starting WorkManager background offline queue sync...")
         val repository = KanakRepository.getInstance(applicationContext)
         try {
-            // No Google ID-token fallback or direct Sheets push that bypasses the outbox.
+            // Recover a fresh backend bearer token even after process death.
+            val firebaseUser = FirebaseAuth.getInstance().currentUser
+                ?: error("Not authenticated: queued transactions remain on device")
+            repository.currentAuthToken = firebaseUser.getIdToken(false).await().token
+                ?.takeIf { it.isNotBlank() } ?: error("Firebase session expired")
             val syncedCount = repository.syncAllPendingNow().getOrThrow()
             Log.i(TAG, "Background sync confirmed $syncedCount queued operations")
             Result.success()
