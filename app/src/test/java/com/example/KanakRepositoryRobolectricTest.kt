@@ -676,15 +676,15 @@ class KanakRepositoryRobolectricTest {
 
     @Test
     fun testResolveUserWithMembership() = runTest {
-        // Owner email
+        // An email address alone must never grant owner permissions.
         val ownerUser = com.example.kanak.domain.models.User(
-            userId = "owner_uid",
+            userId = "unassigned_uid",
             email = "zanabalmuhamed@gmail.com"
         )
         val resolvedOwner = repository.resolveUserWithMembership(ownerUser)
-        assertEquals(com.example.kanak.domain.models.User.ROLE_OWNER, resolvedOwner.role)
-        assertTrue(resolvedOwner.isOwner)
-        assertTrue(resolvedOwner.permissions.containsAll(com.example.kanak.domain.models.KanakPermissions.ALL_PERMISSIONS))
+        assertEquals(com.example.kanak.domain.models.User.ROLE_STANDARD, resolvedOwner.role)
+        assertFalse(resolvedOwner.isOwner)
+        assertFalse(resolvedOwner.permissions.containsAll(com.example.kanak.domain.models.KanakPermissions.ALL_PERMISSIONS))
 
         // Create a van first
         val van = repository.createVan(
