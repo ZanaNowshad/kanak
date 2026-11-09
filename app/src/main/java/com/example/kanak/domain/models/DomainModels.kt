@@ -394,9 +394,7 @@ data class User(
         const val ROLE_STANDARD = "standard"
     }
 
-    val isPlatformAdmin: Boolean get() = role.equals(ROLE_PLATFORM_ADMIN, ignoreCase = true) ||
-            email.trim().equals("zanabalmuhamed@gmail.com", ignoreCase = true) ||
-            email.trim().equals("admin@kanak-fmcg.bh", ignoreCase = true)
+    val isPlatformAdmin: Boolean get() = role.equals(ROLE_PLATFORM_ADMIN, ignoreCase = true)
 
     val isOwner: Boolean get() = isPlatformAdmin || role.equals(ROLE_OWNER, ignoreCase = true) || role.equals(ROLE_ADMIN, ignoreCase = true)
     val isManager: Boolean get() = isOwner || role.equals(ROLE_MANAGER, ignoreCase = true)

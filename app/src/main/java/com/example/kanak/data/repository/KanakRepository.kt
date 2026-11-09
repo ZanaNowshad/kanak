@@ -5,7 +5,6 @@ import com.example.kanak.data.remote.GatewayRequest
 import com.example.kanak.data.remote.KanakApiService
 import com.example.kanak.domain.financial.BahrainFinancials
 import com.example.kanak.domain.models.*
-import com.example.kanak.licensing.LicenseManager
 import com.example.kanak.images.BingThumbnailUrlBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -142,7 +141,6 @@ class KanakRepository(private val context: Context) {
         if (_products.value.any { it.productId.startsWith("prod_00") || it.name.contains("Almarai", ignoreCase = true) }) {
             clearAllData()
         }
-        purgeNonSuperAdminUsersAndCascadeClean()
         recalculateDashboard()
         setupNetworkMonitoring()
         refreshPendingSyncCount()
@@ -233,11 +231,6 @@ class KanakRepository(private val context: Context) {
         val stored = prefs.getString("biz_name", null)
         if (!stored.isNullOrBlank() && !stored.contains("W.L.L.", ignoreCase = true)) {
             return stored.trim()
-        }
-        val licProfile = com.example.kanak.licensing.LicenseManager(context).loadProfile()
-        if (licProfile.companyName.isNotBlank() && !licProfile.companyName.contains("W.L.L.", ignoreCase = true) && !licProfile.companyName.contains("Platform Admin", ignoreCase = true)) {
-            setBusinessName(licProfile.companyName)
-            return licProfile.companyName.trim()
         }
         if (!stored.isNullOrBlank()) {
             val cleaned = stored.replace(Regex("(?i)\\s+W\\.?L\\.?L\\.?", RegexOption.IGNORE_CASE), "").trim()
@@ -2500,16 +2493,6 @@ class KanakRepository(private val context: Context) {
 
     fun resolveUserWithMembership(baseUser: User): User {
         val cleanEmail = baseUser.email.trim()
-        if (cleanEmail.equals("zanabalmuhamed@gmail.com", ignoreCase = true) ||
-            cleanEmail.equals("admin@kanak-fmcg.bh", ignoreCase = true)) {
-            return baseUser.copy(
-                role = User.ROLE_OWNER,
-                permissions = KanakPermissions.ALL_PERMISSIONS,
-                businessId = getBusinessId(),
-                businessName = getBusinessName()
-            )
-        }
-
         val membership = _teamMemberships.value.find {
             it.email.equals(cleanEmail, ignoreCase = true) || it.userId == baseUser.userId
         }
@@ -2525,10 +2508,7 @@ class KanakRepository(private val context: Context) {
             )
         }
 
-        val profile = LicenseManager(context).loadProfile()
-        if (profile.email.equals(cleanEmail, ignoreCase = true) && profile.isActivated) {
-            val companyNameStr: String = if (profile.companyName.isNotBlank()) profile.companyName else getBusinessName()
-            return baseUser.copy(
+        return baseUser.copy(
                 role = User.ROLE_OWNER,
                 businessId = getBusinessId(),
                 businessName = companyNameStr,
@@ -2545,10 +2525,6 @@ class KanakRepository(private val context: Context) {
      */
     fun isBusinessSetupCompleted(email: String): Boolean {
         val clean = email.trim().lowercase(Locale.US)
-        if (clean == "zanabalmuhamed@gmail.com" || clean == "admin@kanak-fmcg.bh") {
-            return true
-        }
-
         // Check if user is an active team/staff member belonging to a registered business
         val membership = _teamMemberships.value.find {
             (it.email.trim().equals(clean, ignoreCase = true) || it.userId == clean) &&
@@ -2561,14 +2537,6 @@ class KanakRepository(private val context: Context) {
         val completedInPrefs = prefs.getBoolean("biz_setup_completed_$clean", false)
         if (completedInPrefs) return true
 
-        // Check if company profile is activated in LicenseManager
-        try {
-            val licProfile = LicenseManager(context).loadProfile()
-            if (licProfile.email.trim().equals(clean, ignoreCase = true) && licProfile.isActivated) {
-                return true
-            }
-        } catch (_: Exception) {}
-
         return false
     }
 
@@ -2578,6 +2546,7 @@ class KanakRepository(private val context: Context) {
     }
 
     suspend fun completeBusinessSetup(
+        userId: String,
         userEmail: String,
         companyName: String,
         businessType: String,
@@ -2601,8 +2570,8 @@ class KanakRepository(private val context: Context) {
             val newBusiness = Business(
                 businessId = newBizId,
                 name = companyName,
-                crNumber = crNumber.ifBlank { "CR-PENDING" },
-                vatNumber = vatNumber.ifBlank { "BH200098765400" },
+                crNumber = crNumber.trim(),
+                vatNumber = vatNumber.trim(),
                 ownerEmail = userEmail,
                 ownerName = companyName,
                 phone = phone,
@@ -2611,6 +2580,22 @@ class KanakRepository(private val context: Context) {
                 createdAt = getBahrainTimestampString()
             )
             _currentBusiness.value = newBusiness
+            // Only the authenticated creator receives business administrator permissions.
+            val ownerMembership = EmployeeMembership(
+                businessId = newBizId,
+                businessName = companyName,
+                userId = userId,
+                email = userEmail.trim(),
+                displayName = userEmail.substringBefore('@'),
+                role = User.ROLE_ADMIN,
+                permissions = KanakPermissions.ALL_PERMISSIONS,
+                status = "ACTIVE",
+                joinedAt = getBahrainDateString()
+            )
+            _teamMemberships.value = _teamMemberships.value.filterNot {
+                it.userId == userId || it.email.equals(userEmail, ignoreCase = true)
+            } + ownerMembership
+            saveMultiTenantState()
             prefs.edit().putString("current_business_json", moshi.adapter(Map::class.java).toJson(
                 mapOf(
                     "business_id" to newBusiness.businessId,
@@ -2634,54 +2619,19 @@ class KanakRepository(private val context: Context) {
             // Create initial van and staff if requested
             if (createInitialVan) {
                 val vId = "van_${UUID.randomUUID().toString().take(8)}"
-                val sId = "staff_${UUID.randomUUID().toString().take(8)}"
-
-                val newStaff = EmployeeMembership(
-                    membershipId = UUID.randomUUID().toString(),
-                    businessId = newBizId,
-                    businessName = companyName,
-                    userId = sId,
-                    email = if (userEmail.contains("@")) "driver@${userEmail.substringAfter("@")}" else "driver@company.bh",
-                    displayName = initialStaffName.ifBlank { "Route Driver" },
-                    role = User.ROLE_SALESPERSON,
-                    assignedVanId = vId,
-                    assignedVanCode = vanCode.ifBlank { "VAN-01" },
-                    permissions = KanakPermissions.DEFAULT_SALESPERSON_PERMISSIONS,
-                    status = "ACTIVE",
-                    joinedAt = getBahrainDateString()
-                )
-
                 val newVan = Van(
                     vanId = vId,
                     businessId = newBizId,
-                    vanCode = vanCode.ifBlank { "VAN-01" },
-                    vanName = vanName.ifBlank { "North Route Van" },
-                    registrationNo = registrationNo.ifBlank { "BH 45678" },
-                    assignedSalespersonId = sId,
-                    assignedSalespersonName = newStaff.displayName,
-                    status = Van.STATUS_ACTIVE,
-                    notes = "Provisioned during Business Setup Wizard"
+                    vanCode = vanCode.trim().ifBlank { error("Van code required") },
+                    vanName = vanName.trim().ifBlank { error("Van name required") },
+                    registrationNo = registrationNo.trim().ifBlank { error("Van plate number required") },
+                    assignedSalespersonId = null,
+                    assignedSalespersonName = null,
+                    status = Van.STATUS_AVAILABLE,
+                    notes = ""
                 )
-
                 _vans.value = _vans.value + newVan
-                _teamMemberships.value = _teamMemberships.value + newStaff
                 saveMultiTenantState()
-            }
-
-            // Activate license locally and in LicenseManager
-            try {
-                val licManager = LicenseManager(context)
-                licManager.registerCompany(
-                    companyName = companyName,
-                    ownerName = companyName,
-                    phone = phone,
-                    email = userEmail,
-                    crNumber = crNumber,
-                    address = address
-                )
-                licManager.validateAndActivate("KNK-MASTER-DEV-PASS")
-            } catch (e: Exception) {
-                android.util.Log.w("KanakRepository", "License registration sync: ${e.message}")
             }
 
             // Mark setup complete
@@ -2693,40 +2643,6 @@ class KanakRepository(private val context: Context) {
             android.util.Log.e("KanakRepository", "Error completing business setup: ${e.message}", e)
             Result.failure(e)
         }
-    }
-
-    fun purgeNonSuperAdminUsersAndCascadeClean() {
-        val superAdminEmail = "zanabalmuhamed@gmail.com"
-        
-        // 1. Purge/deactivate all memberships that are not the super-admin account
-        val remainingMemberships = _teamMemberships.value.filter {
-            it.email.trim().equals(superAdminEmail, ignoreCase = true)
-        }
-        _teamMemberships.value = remainingMemberships
-
-        // 2. Cascade-clean invitations: revoke/remove any pending invitations not for super-admin
-        val remainingInvitations = _pendingInvitations.value.filter {
-            it.recipientEmail.trim().equals(superAdminEmail, ignoreCase = true)
-        }
-        _pendingInvitations.value = remainingInvitations
-
-        // 3. Cascade-clean vans: reassign or unassign all van drivers who were removed
-        val validUserIds = remainingMemberships.map { it.userId }.toSet()
-        val cleanedVans = _vans.value.map { van ->
-            if (van.assignedSalespersonId != null && !validUserIds.contains(van.assignedSalespersonId)) {
-                van.copy(
-                    assignedSalespersonId = null,
-                    assignedSalespersonName = null,
-                    status = Van.STATUS_AVAILABLE
-                )
-            } else {
-                van
-            }
-        }
-        _vans.value = cleanedVans
-
-        // 4. Save clean multi-tenant state
-        saveMultiTenantState()
     }
 
     suspend fun upsertVanLocally(van: Van) {

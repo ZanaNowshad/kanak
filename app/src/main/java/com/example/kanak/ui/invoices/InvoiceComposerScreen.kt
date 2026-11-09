@@ -53,22 +53,17 @@ fun InvoiceComposerScreen(
     val allCustomers by repository.customers.collectAsState()
     val allProducts by repository.products.collectAsState()
 
-    var selectedCustomer by remember { mutableStateOf<Customer?>(allCustomers.firstOrNull()) }
+    var selectedCustomer by remember { mutableStateOf<Customer?>(null) }
     var showCustomerPicker by remember { mutableStateOf(false) }
+    var isCreatingCustomer by remember { mutableStateOf(false) }
+    var isSavingCustomer by remember { mutableStateOf(false) }
+    var customerFormName by remember { mutableStateOf("") }
+    var customerFormPhone by remember { mutableStateOf("") }
+    var customerFormAddress by remember { mutableStateOf("") }
+    var customerFormError by remember { mutableStateOf<String?>(null) }
 
     // Map of productId -> Quantity
-    var cartItems by remember {
-        mutableStateOf<Map<String, BigDecimal>>(
-            if (allProducts.size >= 3) {
-                // Initialize with preview items if available
-                mapOf(
-                    allProducts[0].productId to BigDecimal("12.000"),
-                    allProducts[1].productId to BigDecimal("6.000"),
-                    allProducts[2].productId to BigDecimal("10.000")
-                )
-            } else emptyMap()
-        )
-    }
+    var cartItems by remember { mutableStateOf<Map<String, BigDecimal>>(emptyMap()) }
 
     var productSearchQuery by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
@@ -837,18 +832,35 @@ fun InvoiceComposerScreen(
             containerColor = KanakSurface,
             shape = RoundedCornerShape(20.dp),
             title = {
-                Column {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "Select Customer",
+                        text = if (isCreatingCustomer) "New Customer" else "Select Customer",
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, color = KanakPrimaryText)
                     )
-                    Text(
-                        text = "Choose a customer for this invoice.",
-                        style = MaterialTheme.typography.bodySmall.copy(color = KanakSecondaryText)
-                    )
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = {
+                        isCreatingCustomer = !isCreatingCustomer
+                        customerFormError = null
+                    }, modifier = Modifier.testTag("invoice_add_customer_button")) {
+                        Icon(if (isCreatingCustomer) Icons.Default.ArrowBack else Icons.Default.Add,
+                            contentDescription = if (isCreatingCustomer) "Back to customers" else "Add customer",
+                            tint = KanakPrimaryBlue)
+                    }
                 }
             },
             text = {
+                if (isCreatingCustomer) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(value = customerFormName, onValueChange = { customerFormName = it },
+                            label = { Text("Customer name *") }, singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("invoice_new_customer_name"))
+                        OutlinedTextField(value = customerFormPhone, onValueChange = { customerFormPhone = it },
+                            label = { Text("Phone") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = customerFormAddress, onValueChange = { customerFormAddress = it },
+                            label = { Text("Address") }, modifier = Modifier.fillMaxWidth())
+                        if (customerFormError != null) Text(customerFormError.orEmpty(), color = KanakError)
+                    }
+                } else {
                 Column(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
                     KanakSearchField(
                         query = customerFilter,
@@ -906,10 +918,37 @@ fun InvoiceComposerScreen(
                         }
                     }
                 }
+                }
             },
-            confirmButton = {},
+            confirmButton = {
+                if (isCreatingCustomer) {
+                    Button(
+                        enabled = customerFormName.isNotBlank() && !isSavingCustomer,
+                        onClick = {
+                            scope.launch {
+                                isSavingCustomer = true
+                                customerFormError = null
+                                repository.createCustomer(
+                                    businessName = customerFormName,
+                                    phone = customerFormPhone,
+                                    address = customerFormAddress
+                                ).onSuccess {
+                                    selectedCustomer = it
+                                    showCustomerPicker = false
+                                    isCreatingCustomer = false
+                                    customerFormName = ""
+                                    customerFormPhone = ""
+                                    customerFormAddress = ""
+                                }.onFailure { err -> customerFormError = err.message ?: "Unable to create customer" }
+                                isSavingCustomer = false
+                            }
+                        },
+                        modifier = Modifier.testTag("invoice_save_new_customer_button")
+                    ) { Text(if (isSavingCustomer) "Saving…" else "Save & Select") }
+                }
+            },
             dismissButton = {
-                TextButton(onClick = { showCustomerPicker = false }) {
+                TextButton(onClick = { showCustomerPicker = false; isCreatingCustomer = false }) {
                     Text("Close")
                 }
             }
