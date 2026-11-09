@@ -27,10 +27,10 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import kotlinx.coroutines.delay
 
-private val SplashNavyDark = Color(0xFF060D17)
-private val SplashNavyMid = Color(0xFF0D1B2A)
-private val SplashGold = Color(0xFFD4AF37)
-private val SplashGoldBright = Color(0xFFFFE58F)
+private val SplashNavyDark = Color(0xFFF8FAFF)
+private val SplashNavyMid = Color(0xFFFFFFFF)
+private val SplashGold = Color(0xFF2563FF)
+private val SplashGoldBright = Color(0xFF2563FF)
 private val SplashCyan = Color(0xFF38BDF8)
 private val BahrainCrimson = Color(0xFFE1001A)
 
@@ -191,7 +191,7 @@ fun KanakStartupLoader(
                     )
                 ) {
                     Image(
-                        painter = painterResource(id = R.drawable.kanak_app_icon_1794073715264),
+                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
                         contentDescription = "KANAK Master Brand Emblem",
                         modifier = Modifier
                             .fillMaxSize()
@@ -211,7 +211,7 @@ fun KanakStartupLoader(
                 style = MaterialTheme.typography.displaySmall.copy(
                     fontWeight = FontWeight.Black,
                     letterSpacing = 8.sp,
-                    color = Color.White
+                    color = Color(0xFF0B0F1A)
                 )
             )
 
@@ -232,7 +232,7 @@ fun KanakStartupLoader(
                         text = "BAHRAIN",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Black,
-                        color = Color.White,
+                        color = Color(0xFF0B0F1A),
                         letterSpacing = 1.2.sp,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                     )
