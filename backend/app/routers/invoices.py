@@ -4,6 +4,7 @@ from decimal import Decimal
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from typing import List
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -18,6 +19,27 @@ router = APIRouter(prefix="/invoices", tags=["Invoices"])
 
 def quantize_bhd(val: Decimal) -> Decimal:
     return val.quantize(Decimal("0.001"))
+
+
+def _same_invoice_operation(existing: Invoice, req: InvoiceCreate) -> bool:
+    """Only an identical economic operation can be acknowledged as a replay."""
+    if (existing.tenant_id != req.tenant_id
+            or existing.invoice_number != req.invoice_number.strip()
+            or existing.customer_id != req.customer_id
+            or existing.van_id != req.van_id
+            or existing.payment_mode != req.payment_mode.upper()):
+        return False
+    stored = sorted(
+        (line.product_id, str(line.quantity), str(line.unit_price), str(line.vat_rate))
+        for line in existing.lines
+    )
+    incoming = sorted(
+        (line.product_id, str(quantize_bhd(line.quantity)),
+         str(quantize_bhd(line.unit_price)), str(quantize_bhd(line.vat_rate)))
+        for line in req.lines
+    )
+    return stored == incoming
+
 
 @router.get("", response_model=List[InvoiceResponse])
 def get_invoices(
@@ -48,6 +70,12 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db),
         raise HTTPException(status_code=400, detail="Invoice must contain at least one line item")
     if not req.invoice_number.strip():
         raise HTTPException(status_code=400, detail="Invoice number is required")
+    if req.client_operation_id:
+        previously = db.query(Invoice).filter(Invoice.id == req.client_operation_id).first()
+        if previously:
+            if previously.tenant_id == user.tenant_id and _same_invoice_operation(previously, req):
+                return previously
+            raise HTTPException(status_code=409, detail="Operation ID already used for another invoice")
     existing = db.query(Invoice).filter(Invoice.invoice_number == req.invoice_number.strip()).first()
     if existing is not None:
         raise HTTPException(status_code=409, detail="Duplicate invoice number: inspect existing invoice before retrying")
@@ -68,10 +96,11 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db),
 
     processed_lines = []
 
-    for item in req.lines:
+    # Stable lock order avoids deadlocks when two vans sell overlapping products.
+    for item in sorted(req.lines, key=lambda line: line.product_id):
         product = db.query(Product).filter(Product.id == item.product_id,
                                            Product.tenant_id == req.tenant_id,
-                                           Product.is_active.is_(True)).first()
+                                           Product.is_active.is_(True)).with_for_update().first()
         if product is None:
             raise HTTPException(status_code=404, detail="Product not found")
         if Decimal(str(item.unit_price)) != Decimal(str(product.unit_price)) or Decimal(str(item.vat_rate)) != Decimal(str(product.vat_rate)):
@@ -112,7 +141,7 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db),
         customer.outstanding_balance = new_balance
 
     # Create Invoice entity
-    invoice_id = str(uuid.uuid4())
+    invoice_id = req.client_operation_id or str(uuid.uuid4())
     invoice = Invoice(
         id=invoice_id,
         tenant_id=req.tenant_id,
@@ -183,7 +212,18 @@ def create_invoice(req: InvoiceCreate, db: Session = Depends(get_db),
         )
         db.add(movement)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as error:
+        # A concurrent retry may have committed the same operation first.
+        # Roll back this transaction (including all attempted inventory changes)
+        # before inspecting the durable result.
+        db.rollback()
+        if req.client_operation_id:
+            recorded = db.query(Invoice).filter(Invoice.id == req.client_operation_id).first()
+            if recorded and recorded.tenant_id == user.tenant_id and _same_invoice_operation(recorded, req):
+                return recorded
+        raise HTTPException(status_code=409, detail="Invoice already exists or conflicts with another transaction") from error
     db.refresh(invoice)
     return invoice
 
@@ -196,6 +236,8 @@ def generate_tax_invoice_pdf(invoice_id: str, db: Session = Depends(get_db),
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id,
                                        Invoice.tenant_id == user.tenant_id).first()
     if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if user.role.upper() == "VAN_REP" and invoice.van_id != user.assigned_van_id:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     tenant = db.query(Tenant).filter(Tenant.id == invoice.tenant_id).first()
